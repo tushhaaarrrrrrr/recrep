@@ -50,12 +50,12 @@ class LeaderboardStatsCog(commands.Cog):
                 rows = await DBService.get_category_leaderboard(category.value, period.value)
                 title = f"🤝 {period.name} Progress Help Leaderboard"
                 value_key = "count"
-                unit = "helps"
+                unit = "help(s)"
             else:
                 rows = await DBService.get_category_leaderboard(category.value, period.value)
                 title = f"📊 {period.name} {category.name} Leaderboard"
                 value_key = "count"
-                unit = "forms"
+                unit = "form(s)"
 
             embed = discord.Embed(
                 title=title,
@@ -71,7 +71,7 @@ class LeaderboardStatsCog(commands.Cog):
                     member = interaction.guild.get_member(row['discord_id'])
                     name = member.display_name if member else f"User {row['discord_id']}"
                     value = row[value_key]
-                    lines.append(f"{idx}. **{name}** – {value} {unit}")
+                    lines.append(f"{idx}. **{name}** - {value} {unit}")
                 embed.description = "\n".join(lines)
                 embed.set_footer(text=f"Showing top {min(len(rows), 10)} out of {len(rows)}")
 

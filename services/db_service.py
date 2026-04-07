@@ -286,6 +286,7 @@ class DBService:
     # Category leaderboards
     @staticmethod
     async def get_help_leaderboard(period: str, limit: int = 10) -> List[Dict]:
+        """Return top users by number of helps (progress_help entries)."""
         if period == 'weekly':
             time_filter = "created_at >= date_trunc('week', CURRENT_DATE)"
         elif period == 'biweekly':
@@ -297,7 +298,7 @@ class DBService:
 
         rows = await DBService.fetch(
             f"""
-            SELECT staff_id, SUM(points) as count
+            SELECT staff_id, COUNT(*) as count
             FROM reputation_log
             WHERE form_type = 'progress_help' AND {time_filter}
             GROUP BY staff_id
