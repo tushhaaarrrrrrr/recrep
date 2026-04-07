@@ -74,6 +74,9 @@ class EvictionCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
+            # Send non‑ephemeral confirmation message to the user
+            confirm_msg = await interaction.followup.send("✅ Eviction report submitted - pending approval.")
+
             config = await DBService.get_guild_config(interaction.guild_id)
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
@@ -103,15 +106,11 @@ class EvictionCog(commands.Cog):
                         guild_id=interaction.guild_id,
                         channel_config_key='eviction_channel_id',
                         thread_prefix="Evictions",
+                        confirmation_msg_id=confirm_msg.id,
                         form_data=form_data
                     )
                     msg = await approval_channel.send(embed=embed, view=view)
                     await DBService.set_approval_message_id('eviction_report', form_id, msg.id)
-
-            await interaction.followup.send(
-                "✅ Eviction report submitted - pending approval.",
-                ephemeral=True
-            )
 
         except Exception as e:
             logger.exception(f"Error in eviction_submit: {e}")

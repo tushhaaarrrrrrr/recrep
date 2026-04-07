@@ -120,7 +120,7 @@ class ApprovalCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"📄 Resubmitted: {table.replace('_', ' ').title()}",
-            description=f"**Form ID:** `{form_id}`",
+            description=f"**Form ID:** `{form_id}` (table: `{table}`)",
             color=discord.Color.blue(),
             timestamp=discord.utils.utcnow()
         )

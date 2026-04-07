@@ -191,7 +191,6 @@ class DBService:
     # Approval message ID (for editing)
     @staticmethod
     async def set_approval_message_id(table: str, form_id: int, message_id: int):
-        """Store the Discord message ID of the approval embed."""
         await DBService.execute(
             f"UPDATE {table} SET approval_message_id = $1 WHERE id = $2",
             message_id, form_id
@@ -199,7 +198,6 @@ class DBService:
 
     @staticmethod
     async def get_approval_message_id(table: str, form_id: int) -> Optional[int]:
-        """Retrieve the stored approval message ID."""
         row = await DBService.fetchrow(
             f"SELECT approval_message_id FROM {table} WHERE id = $1", form_id
         )
@@ -207,7 +205,6 @@ class DBService:
 
     @staticmethod
     async def get_full_form_data(table: str, form_id: int) -> Optional[Dict]:
-        """Fetch all columns of a form."""
         row = await DBService.fetchrow(f"SELECT * FROM {table} WHERE id = $1", form_id)
         return dict(row) if row else None
 
@@ -233,7 +230,7 @@ class DBService:
             view = 'biweekly_reputation'
         elif period == 'monthly':
             view = 'monthly_reputation'
-        else:  # 'all'
+        else:
             rows = await DBService.fetch(
                 "SELECT discord_id, reputation AS points FROM staff_member ORDER BY reputation DESC LIMIT $1",
                 limit
@@ -289,7 +286,6 @@ class DBService:
     # Category leaderboards
     @staticmethod
     async def get_help_leaderboard(period: str, limit: int = 10) -> List[Dict]:
-        """Return top users by 'progress_help' points for a given period."""
         if period == 'weekly':
             time_filter = "created_at >= date_trunc('week', CURRENT_DATE)"
         elif period == 'biweekly':
@@ -450,17 +446,11 @@ class DBService:
 
     # Form editing support
     @staticmethod
-    async def get_form_by_id(form_id: int) -> Optional[tuple]:
-        """Return (table, status, submitted_by) for the given form ID."""
-        tables = [
-            'recruitment', 'progress_report', 'purchase_invoice',
-            'demolition_report', 'demolition_request', 'eviction_report',
-            'scroll_completion'
-        ]
-        for table in tables:
-            row = await DBService.fetchrow(f"SELECT status, submitted_by FROM {table} WHERE id = $1", form_id)
-            if row:
-                return (table, row['status'], row['submitted_by'])
+    async def get_form_by_id(table: str, form_id: int) -> Optional[tuple]:
+        """Return (status, submitted_by) for the given form ID and table."""
+        row = await DBService.fetchrow(f"SELECT status, submitted_by FROM {table} WHERE id = $1", form_id)
+        if row:
+            return (row['status'], row['submitted_by'])
         return None
 
     @staticmethod

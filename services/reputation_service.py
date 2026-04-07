@@ -10,7 +10,7 @@ REP_POINTS = {
     'progress_help': 10,
     'purchase_invoice': 5,
     'demolition_report': 3,
-    'demolition_request': 1,
+    'demolition_request': 3,
     'eviction_report': 2,
     'scroll_completion': 5,
     'approval': 2

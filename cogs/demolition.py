@@ -20,7 +20,7 @@ class DemolitionCog(commands.Cog):
     )
     @app_commands.describe(
         ingame_username="Minecraft username of the player whose plots were demolished",
-        removed="Status: `yes` (removed) or `tbd` (to be determined)",
+        removed="Status: `yes` (removed) or `tbd`",
         stashed_items="Were items moved to town storage? `yes` or `no`",
         screenshot1="Screenshot evidence (at least one required)",
         screenshot2="Additional screenshot (optional)",
@@ -74,6 +74,9 @@ class DemolitionCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
+            # Send confirmation message (non‑ephemeral)
+            confirm_msg = await interaction.followup.send("✅ Demolition report submitted - pending approval.")
+
             config = await DBService.get_guild_config(interaction.guild_id)
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
@@ -103,15 +106,13 @@ class DemolitionCog(commands.Cog):
                         guild_id=interaction.guild_id,
                         channel_config_key='demolition_channel_id',
                         thread_prefix="Demolitions",
+                        confirmation_msg_id=confirm_msg.id,
                         form_data=form_data
                     )
                     msg = await approval_channel.send(embed=embed, view=view)
                     await DBService.set_approval_message_id('demolition_report', form_id, msg.id)
-
-            await interaction.followup.send(
-                "✅ Demolition report submitted - pending approval.",
-                ephemeral=True
-            )
+            else:
+                pass
 
         except Exception as e:
             logger.exception(f"Error in demolition_submit: {e}")
@@ -122,7 +123,7 @@ class DemolitionCog(commands.Cog):
 
     @app_commands.command(
         name="request_demolition",
-        description="[Admin] Request demolition of a player's plots (town policy enforcement)"
+        description="[Admin] Request demolition of a player's plots"
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
@@ -178,6 +179,8 @@ class DemolitionCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
+            confirm_msg = await interaction.followup.send("📢 Demolition request submitted - pending admin review.")
+
             config = await DBService.get_guild_config(interaction.guild_id)
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
@@ -206,15 +209,13 @@ class DemolitionCog(commands.Cog):
                         guild_id=interaction.guild_id,
                         channel_config_key='demolition_channel_id',
                         thread_prefix="Demolition Requests",
+                        confirmation_msg_id=confirm_msg.id,
                         form_data=form_data
                     )
                     msg = await approval_channel.send(embed=embed, view=view)
                     await DBService.set_approval_message_id('demolition_request', form_id, msg.id)
-
-            await interaction.followup.send(
-                "📢 Demolition request submitted - pending admin review.",
-                ephemeral=True
-            )
+            else:
+                pass
 
         except Exception as e:
             logger.exception(f"Error in demolition_request: {e}")

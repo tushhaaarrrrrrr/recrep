@@ -2,8 +2,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from services.db_service import DBService
-from services.s3_service import upload_image
-from utils.views import ApprovalView
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -15,9 +13,15 @@ class FormEditCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    VALID_TABLES = [
+        'recruitment', 'progress_report', 'purchase_invoice',
+        'demolition_report', 'demolition_request', 'eviction_report',
+        'scroll_completion'
+    ]
+
     ALLOWED_FIELDS = {
         'recruitment': {
-            'ingame_username': 'In‑game Username',
+            'ingame_username': 'In-game Username',
             'discord_username': 'Discord Username',
             'age': 'Age',
             'nickname': 'Nickname',
@@ -30,7 +34,7 @@ class FormEditCog(commands.Cog):
         },
         'purchase_invoice': {
             'purchasee_nickname': 'Buyer Nickname',
-            'purchasee_ingame': 'Buyer In‑game',
+            'purchasee_ingame': 'Buyer In-game',
             'purchase_type': 'Purchase Type',
             'amount_deposited': 'Amount Deposited',
             'num_plots': 'Number of Plots',
@@ -60,6 +64,7 @@ class FormEditCog(commands.Cog):
 
     @app_commands.command(name="form", description="Edit a pending or held form")
     @app_commands.describe(
+        table="The table containing the form (e.g., recruitment, progress_report)",
         form_id="ID of the form to edit",
         field="Field to edit (see list of valid fields)",
         value="New value for the field"
@@ -67,16 +72,24 @@ class FormEditCog(commands.Cog):
     async def form_edit(
         self,
         interaction: discord.Interaction,
+        table: str,
         form_id: int,
         field: str,
         value: str
     ):
         """Edit a specific field of a pending or held form."""
-        form_info = await DBService.get_form_by_id(form_id)
+        if table not in self.VALID_TABLES:
+            await interaction.response.send_message(
+                f"❌ Invalid table name. Valid options: {', '.join(self.VALID_TABLES)}",
+                ephemeral=True
+            )
+            return
+
+        form_info = await DBService.get_form_by_id(table, form_id)
         if not form_info:
             await interaction.response.send_message("❌ Form not found.", ephemeral=True)
             return
-        table, status, submitter_id = form_info
+        status, submitter_id = form_info
         if interaction.user.id != submitter_id:
             await interaction.response.send_message("❌ You can only edit your own forms.", ephemeral=True)
             return

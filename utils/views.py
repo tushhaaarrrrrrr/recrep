@@ -14,7 +14,8 @@ class ApprovalView(discord.ui.View):
     """View with Approve/Deny/Hold buttons for form approval."""
 
     def __init__(self, table: str, form_id: int, form_type: str, submitter_id: int,
-                 guild_id: int, channel_config_key: str, thread_prefix: str, form_data: dict = None):
+                 guild_id: int, channel_config_key: str, thread_prefix: str,
+                 confirmation_msg_id: int = None, form_data: dict = None):
         super().__init__(timeout=604800)
         self.table = table
         self.form_id = form_id
@@ -23,6 +24,7 @@ class ApprovalView(discord.ui.View):
         self.guild_id = guild_id
         self.channel_config_key = channel_config_key
         self.thread_prefix = thread_prefix
+        self.confirmation_msg_id = confirmation_msg_id
         self.form_data = form_data
 
     async def _is_authorized(self, interaction: discord.Interaction) -> bool:
@@ -34,7 +36,7 @@ class ApprovalView(discord.ui.View):
 
     async def _fetch_form_details(self) -> dict:
         columns = {
-            'recruitment': ['submitted_by', 'ingame_username', 'nickname', 'plots', 'screenshot_urls', 'status'],
+            'recruitment': ['submitted_by', 'ingame_username', 'nickname', 'plots', 'screenshot_urls', 'status', 'discord_username'],
             'progress_report': ['submitted_by', 'project_name', 'time_spent', 'helper_mentions', 'screenshot_urls', 'status'],
             'purchase_invoice': ['submitted_by', 'purchasee_nickname', 'purchasee_ingame', 'amount_deposited', 'screenshot_urls', 'status'],
             'demolition_report': ['submitted_by', 'ingame_username', 'removed', 'screenshot_urls', 'status'],
@@ -110,7 +112,7 @@ class ApprovalView(discord.ui.View):
             if first_url:
                 embed.set_image(url=first_url)
                 if extra_count > 0:
-                    embed.add_field(name="📸 Additional Screenshots", value=f"{extra_count} more", inline=False)
+                    embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
 
             embed.set_footer(text=f"Approved on {timestamp_str}")
             try:
@@ -148,6 +150,15 @@ class ApprovalView(discord.ui.View):
     async def _handle_approval(self, interaction: discord.Interaction, approve: bool, hold: bool = False):
         await interaction.response.defer()
 
+        # Delete the confirmation message if it exists
+        if self.confirmation_msg_id:
+            try:
+                channel = interaction.channel
+                msg = await channel.fetch_message(self.confirmation_msg_id)
+                await msg.delete()
+            except Exception as e:
+                logger.warning(f"Could not delete confirmation message {self.confirmation_msg_id}: {e}")
+
         if not await self._is_authorized(interaction):
             await interaction.followup.send(
                 "❌ You don't have permission to approve/deny forms. (Requires Admin or Comayor role)",
@@ -182,7 +193,6 @@ class ApprovalView(discord.ui.View):
                 await DBService.approve_form(self.table, self.form_id, interaction.user.id)
                 await self._send_notification(interaction.guild, interaction.user)
 
-                # Delete the original approval message
                 await interaction.message.delete()
                 await interaction.followup.send(
                     f"✅ **Form #{self.form_id} approved** by {interaction.user.display_name}.",
@@ -190,7 +200,6 @@ class ApprovalView(discord.ui.View):
                 )
             elif hold:
                 await DBService.hold_form(self.table, self.form_id)
-                # Re-enable buttons for later action
                 for child in self.children:
                     child.disabled = False
                 await interaction.edit_original_response(view=self)
@@ -202,11 +211,9 @@ class ApprovalView(discord.ui.View):
                     ),
                     view=self
                 )
-            else:  # deny
+            else:
                 await DBService.deny_form(self.table, self.form_id)
-                # Delete associated images from S3
                 await self._delete_form_images()
-                # Delete the original approval message
                 await interaction.message.delete()
                 await interaction.followup.send(
                     f"❌ **Form #{self.form_id} denied** by {interaction.user.display_name}.",
