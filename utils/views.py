@@ -15,7 +15,8 @@ class ApprovalView(discord.ui.View):
 
     def __init__(self, table: str, form_id: int, form_type: str, submitter_id: int,
                  guild_id: int, channel_config_key: str, thread_prefix: str,
-                 confirmation_msg_id: int = None, form_data: dict = None):
+                 confirmation_msg_id: int = None, confirmation_channel_id: int = None,
+                 form_data: dict = None):
         super().__init__(timeout=604800)
         self.table = table
         self.form_id = form_id
@@ -25,6 +26,7 @@ class ApprovalView(discord.ui.View):
         self.channel_config_key = channel_config_key
         self.thread_prefix = thread_prefix
         self.confirmation_msg_id = confirmation_msg_id
+        self.confirmation_channel_id = confirmation_channel_id
         self.form_data = form_data
 
     async def _is_authorized(self, interaction: discord.Interaction) -> bool:
@@ -150,14 +152,18 @@ class ApprovalView(discord.ui.View):
     async def _handle_approval(self, interaction: discord.Interaction, approve: bool, hold: bool = False):
         await interaction.response.defer()
 
-        # Delete the confirmation message if it exists
-        if self.confirmation_msg_id:
+        # Delete the confirmation message from its original channel
+        if self.confirmation_msg_id and self.confirmation_channel_id:
             try:
-                channel = interaction.channel
-                msg = await channel.fetch_message(self.confirmation_msg_id)
-                await msg.delete()
+                channel = interaction.client.get_channel(self.confirmation_channel_id)
+                if channel:
+                    msg = await channel.fetch_message(self.confirmation_msg_id)
+                    await msg.delete()
+                    logger.debug(f"Deleted confirmation message {self.confirmation_msg_id}")
+            except discord.NotFound:
+                logger.debug(f"Confirmation message {self.confirmation_msg_id} already deleted")
             except Exception as e:
-                logger.warning(f"Could not delete confirmation message {self.confirmation_msg_id}: {e}")
+                logger.warning(f"Failed to delete confirmation message {self.confirmation_msg_id}: {e}")
 
         if not await self._is_authorized(interaction):
             await interaction.followup.send(

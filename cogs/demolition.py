@@ -74,7 +74,6 @@ class DemolitionCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
-            # Send confirmation message (non‑ephemeral)
             confirm_msg = await interaction.followup.send("✅ Demolition report submitted - pending approval.")
 
             config = await DBService.get_guild_config(interaction.guild_id)
@@ -107,12 +106,11 @@ class DemolitionCog(commands.Cog):
                         channel_config_key='demolition_channel_id',
                         thread_prefix="Demolitions",
                         confirmation_msg_id=confirm_msg.id,
+                        confirmation_channel_id=interaction.channel_id,
                         form_data=form_data
                     )
                     msg = await approval_channel.send(embed=embed, view=view)
                     await DBService.set_approval_message_id('demolition_report', form_id, msg.id)
-            else:
-                pass
 
         except Exception as e:
             logger.exception(f"Error in demolition_submit: {e}")
@@ -210,12 +208,11 @@ class DemolitionCog(commands.Cog):
                         channel_config_key='demolition_channel_id',
                         thread_prefix="Demolition Requests",
                         confirmation_msg_id=confirm_msg.id,
+                        confirmation_channel_id=interaction.channel_id,
                         form_data=form_data
                     )
                     msg = await approval_channel.send(embed=embed, view=view)
                     await DBService.set_approval_message_id('demolition_request', form_id, msg.id)
-            else:
-                pass
 
         except Exception as e:
             logger.exception(f"Error in demolition_request: {e}")

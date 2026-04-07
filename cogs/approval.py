@@ -144,7 +144,10 @@ class ApprovalCog(commands.Cog):
             submitter_id=row['submitted_by'],
             guild_id=interaction.guild_id,
             channel_config_key=f"{table}_channel_id",
-            thread_prefix=table.replace('_', ' ').title()
+            thread_prefix=table.replace('_', ' ').title(),
+            confirmation_msg_id=None,
+            confirmation_channel_id=None,
+            form_data=None
         )
 
         msg = await approval_channel.send(embed=embed, view=view)

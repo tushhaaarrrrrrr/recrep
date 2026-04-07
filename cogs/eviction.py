@@ -74,7 +74,6 @@ class EvictionCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
-            # Send non‑ephemeral confirmation message to the user
             confirm_msg = await interaction.followup.send("✅ Eviction report submitted - pending approval.")
 
             config = await DBService.get_guild_config(interaction.guild_id)
@@ -107,6 +106,7 @@ class EvictionCog(commands.Cog):
                         channel_config_key='eviction_channel_id',
                         thread_prefix="Evictions",
                         confirmation_msg_id=confirm_msg.id,
+                        confirmation_channel_id=interaction.channel_id,
                         form_data=form_data
                     )
                     msg = await approval_channel.send(embed=embed, view=view)
