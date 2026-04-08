@@ -1,6 +1,13 @@
 from database.connection import get_db_pool
 from typing import Optional, List, Dict, Any
 import asyncpg
+import re
+
+def extract_user_id_from_mention(mention: str) -> int:
+    match = re.search(r'<@!?(\d+)>', mention)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 class DBService:
@@ -188,7 +195,6 @@ class DBService:
             f"UPDATE {table} SET thread_message_id = $1 WHERE id = $2", message_id, form_id
         )
 
-    # Approval message ID (for editing)
     @staticmethod
     async def set_approval_message_id(table: str, form_id: int, message_id: int):
         await DBService.execute(
@@ -283,7 +289,6 @@ class DBService:
         stats['reputation'] = rep['reputation'] if rep else 0
         return stats
 
-    # Category leaderboards
     @staticmethod
     async def get_help_leaderboard(period: str, limit: int = 10) -> List[Dict]:
         if period == 'weekly':
@@ -345,9 +350,9 @@ class DBService:
         rows = await DBService.fetch(query, limit)
         return [dict(row) for row in rows]
 
-    # Detailed user stats with time period filter
     @staticmethod
     async def get_user_detailed_stats(discord_id: int, period: str = 'all') -> Dict:
+        # Time filter for form submissions
         if period == 'weekly':
             time_filter = "submitted_at >= date_trunc('week', CURRENT_DATE)"
         elif period == 'biweekly':
@@ -370,6 +375,7 @@ class DBService:
             )
             stats[table] = count[0] if count else 0
 
+        # Time filter for reputation log
         if period == 'weekly':
             rep_time_filter = "created_at >= date_trunc('week', CURRENT_DATE)"
         elif period == 'biweekly':
@@ -404,6 +410,48 @@ class DBService:
         stats['points_breakdown'] = {row['form_type']: row['total'] for row in breakdown_rows}
 
         return stats
+
+    @staticmethod
+    async def refresh_all_reputation():
+        """Rebuild reputation_log and staff_member.reputation from all approved forms."""
+        # Clear existing data
+        await DBService.execute("TRUNCATE reputation_log")
+        await DBService.execute("UPDATE staff_member SET reputation = 0")
+
+        # Process each form table
+        form_config = [
+            ('recruitment', 7, 'recruitment'),
+            ('progress_report', 10, 'progress_report'),
+            ('purchase_invoice', 5, 'purchase_invoice'),
+            ('demolition_report', 3, 'demolition_report'),
+            ('demolition_request', 3, 'demolition_request'),
+            ('eviction_report', 2, 'eviction_report'),
+            ('scroll_completion', 5, 'scroll_completion')
+        ]
+        for table, points, form_type in form_config:
+            rows = await DBService.fetch(
+                f"SELECT id, submitted_by, approved_by, approved_at FROM {table} WHERE status = 'approved'"
+            )
+            for row in rows:
+                # Submitter points
+                await DBService.add_reputation(
+                    row['submitted_by'], points, f"Submitted {form_type}", form_type, row['id']
+                )
+                # Approver points
+                if row['approved_by']:
+                    await DBService.add_reputation(
+                        row['approved_by'], 2, f"Approved {form_type}", f"{form_type}_approval", row['id']
+                    )
+        # Process progress_help from helper mentions
+        help_rows = await DBService.fetch(
+            "SELECT id, helper_mentions FROM progress_report WHERE status = 'approved' AND helper_mentions IS NOT NULL"
+        )
+        for row in help_rows:
+            helper_id = extract_user_id_from_mention(row['helper_mentions'])
+            if helper_id:
+                await DBService.add_reputation(
+                    helper_id, 10, f"Helped in progress report {row['id']}", 'progress_help', row['id']
+                )
 
     # Internal role management
     @staticmethod

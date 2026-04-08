@@ -286,5 +286,26 @@ class AdminCog(commands.Cog):
             logger.exception(f"Failed to recalculate reputation: {e}")
             await interaction.followup.send("❌ An error occurred while recalculating reputation.", ephemeral=True)
 
+    @app_commands.command(
+        name="refresh_stats",
+        description="Completely rebuild reputation and stats from all approved forms"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def refresh_stats(self, interaction: discord.Interaction):
+        """Rebuild reputation_log and staff_member.reputation from scratch using approved forms."""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await DBService.refresh_all_reputation()
+            await interaction.followup.send(
+                "✅ Reputation and statistics have been fully refreshed from approved forms.",
+                ephemeral=True
+            )
+        except Exception as e:
+            logger.exception(f"Failed to refresh stats: {e}")
+            await interaction.followup.send(
+                "❌ An error occurred while refreshing statistics.",
+                ephemeral=True
+            )
+
 async def setup(bot):
     await bot.add_cog(AdminCog(bot))
