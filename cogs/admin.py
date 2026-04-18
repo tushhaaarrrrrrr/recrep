@@ -20,10 +20,23 @@ class AdminCog(commands.Cog):
         'Eviction': 'eviction_channel_id',
         'Scroll': 'scroll_channel_id'
     }
+    # Additional configurable IDs (not channels)
+    _CONFIG_KEYS = {
+        'Community Guild': 'community_guild_id',
+        'Player Role': 'player_role_id'
+    }
 
     def __init__(self, bot):
         self.bot = bot
         self.start_time = time.time()
+
+    async def _safe_defer(self, interaction: discord.Interaction, ephemeral: bool = True) -> bool:
+        """Safely defer an interaction, returning False if the interaction is already invalid."""
+        try:
+            await interaction.response.defer(ephemeral=ephemeral)
+            return True
+        except (discord.NotFound, discord.HTTPException):
+            return False
 
     @app_commands.command(
         name="set_approval_channel",
@@ -57,6 +70,87 @@ class AdminCog(commands.Cog):
         logger.info(f"Guild {interaction.guild_id}: {log_type.name} log channel set to {channel.id}")
         await interaction.response.send_message(
             f"✅ {log_type.name} log channel set – monthly threads will be created in {channel.mention}",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="set_community_guild",
+        description="Set the ID of the community server where the player role will be assigned"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def set_community_guild(self, interaction: discord.Interaction, guild_id: str):
+        """Store the community guild ID (must be a server the bot is in)."""
+        try:
+            guild_id_int = int(guild_id)
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ Invalid guild ID. Please provide a numeric ID.",
+                ephemeral=True
+            )
+            return
+
+        # Verify the bot is in that guild
+        guild = self.bot.get_guild(guild_id_int)
+        if not guild:
+            await interaction.response.send_message(
+                f"❌ Bot is not a member of guild with ID `{guild_id_int}`. Invite the bot to that server first.",
+                ephemeral=True
+            )
+            return
+
+        await DBService.set_guild_config(interaction.guild_id, community_guild_id=guild_id_int)
+        logger.info(f"Guild {interaction.guild_id}: Community guild set to {guild_id_int} ({guild.name})")
+        await interaction.response.send_message(
+            f"✅ Community guild set to **{guild.name}** (`{guild_id_int}`).",
+            ephemeral=True
+        )
+
+    @app_commands.command(
+        name="set_player_role",
+        description="Set the role to assign to new players in the community server"
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def set_player_role(self, interaction: discord.Interaction, role_id: str):
+        """Store the player role ID (must exist in the configured community guild)."""
+        try:
+            role_id_int = int(role_id)
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ Invalid role ID. Please provide a numeric ID.",
+                ephemeral=True
+            )
+            return
+
+        # Verify the role exists in the configured community guild
+        config = await DBService.get_guild_config(interaction.guild_id)
+        community_guild_id = config.get('community_guild_id') if config else None
+        if not community_guild_id:
+            await interaction.response.send_message(
+                "❌ Community guild not configured. Use `/set_community_guild` first.",
+                ephemeral=True
+            )
+            return
+
+        guild = self.bot.get_guild(community_guild_id)
+        if not guild:
+            await interaction.response.send_message(
+                f"❌ Community guild (ID `{community_guild_id}`) not found. The bot may have been removed.",
+                ephemeral=True
+            )
+            return
+
+        role = guild.get_role(role_id_int)
+        if not role:
+            await interaction.response.send_message(
+                f"❌ Role with ID `{role_id_int}` not found in **{guild.name}**.",
+                ephemeral=True
+            )
+            return
+
+        await DBService.set_guild_config(interaction.guild_id, player_role_id=role_id_int)
+        logger.info(f"Guild {interaction.guild_id}: Player role set to {role_id_int} ({role.name})")
+        await interaction.response.send_message(
+            f"✅ Player role set to **{role.name}** (`{role_id_int}`) in **{guild.name}**.",
             ephemeral=True
         )
 
@@ -120,7 +214,8 @@ class AdminCog(commands.Cog):
                     )
             else:
                 # Full role list may take time; defer to avoid timeout
-                await interaction.response.defer(ephemeral=True)
+                if not await self._safe_defer(interaction):
+                    return
 
                 embed = discord.Embed(
                     title="Internal Staff Roles",
@@ -156,12 +251,13 @@ class AdminCog(commands.Cog):
 
     @app_commands.command(
         name="view_config",
-        description="Show current channel configuration and internal roles"
+        description="Show current channel configuration, community settings, and internal roles"
     )
     @app_commands.default_permissions(administrator=True)
     async def view_config(self, interaction: discord.Interaction):
         # Defer to prevent timeout while fetching config and roles
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction):
+            return
 
         config = await DBService.get_guild_config(interaction.guild_id)
         embed = discord.Embed(
@@ -170,6 +266,7 @@ class AdminCog(commands.Cog):
             timestamp=discord.utils.utcnow()
         )
 
+        # Channel configuration
         channel_config = {
             "Approval Channel": config.get("approval_channel_id") if config else None,
             "Recruitment Logs": config.get("recruitment_channel_id") if config else None,
@@ -193,6 +290,35 @@ class AdminCog(commands.Cog):
             inline=False
         )
 
+        # Community configuration
+        community_guild_id = config.get('community_guild_id') if config else None
+        player_role_id = config.get('player_role_id') if config else None
+
+        comm_text = []
+        if community_guild_id:
+            guild = self.bot.get_guild(community_guild_id)
+            comm_text.append(f"• Community Guild: {guild.name if guild else f'`{community_guild_id}` (bot not in server)'}")
+        else:
+            comm_text.append("• Community Guild: ❌ Not set")
+        if player_role_id:
+            if community_guild_id:
+                guild = self.bot.get_guild(community_guild_id)
+                if guild:
+                    role = guild.get_role(player_role_id)
+                    comm_text.append(f"• Player Role: {role.mention if role else f'`{player_role_id}` (deleted)'}")
+                else:
+                    comm_text.append(f"• Player Role: `{player_role_id}` (guild unknown)")
+            else:
+                comm_text.append(f"• Player Role: `{player_role_id}` (guild not set)")
+        else:
+            comm_text.append("• Player Role: ❌ Not set")
+        embed.add_field(
+            name="Community Server Integration",
+            value="\n".join(comm_text),
+            inline=False
+        )
+
+        # Internal roles
         for role_name in self._VALID_ROLES:
             users = await DBService.list_users_with_role(role_name)
             if users:
@@ -228,8 +354,8 @@ class AdminCog(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def status_command(self, interaction: discord.Interaction):
         """Display bot status, uptime, and database connection health."""
-        # Defer to allow time for DB health check
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction):
+            return
 
         uptime_seconds = int(time.time() - self.start_time)
         days = uptime_seconds // 86400
@@ -269,7 +395,8 @@ class AdminCog(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def recalculate_reputation(self, interaction: discord.Interaction):
         """Recalculate reputation for all staff members."""
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction):
+            return
         try:
             # Sum points per staff_id from reputation_log
             rows = await DBService.fetch(
@@ -302,7 +429,8 @@ class AdminCog(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def refresh_stats(self, interaction: discord.Interaction):
         """Rebuild reputation_log and staff_member.reputation from scratch using approved forms."""
-        await interaction.response.defer(ephemeral=True)
+        if not await self._safe_defer(interaction):
+            return
         try:
             await DBService.refresh_all_reputation()
             await interaction.followup.send(

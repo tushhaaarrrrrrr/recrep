@@ -31,7 +31,7 @@ _event_loop = None
 async def _init_global_pool():
     global _db_pool
     _db_pool = await init_db_pool()
-    DBService._db_pool = _db_pool
+    # DBService uses the pool from database.connection, not an instance variable
 
 def _start_async_loop():
     global _event_loop
@@ -51,17 +51,26 @@ time.sleep(0.5)
 
 # ── Bot process management ────────────────────────────────────────────────────
 def _get_bot_process():
+    """Return psutil.Process if the bot is running and is actually the bot script."""
     if not os.path.exists(PID_FILE):
         return None
     try:
         with open(PID_FILE) as f:
             pid = int(f.read().strip())
         proc = psutil.Process(pid)
-        if BOT_SCRIPT in " ".join(proc.cmdline()):
+        # Check that the process is a Python process and the command line contains the bot script
+        cmdline = proc.cmdline()
+        if not cmdline:
+            raise psutil.NoSuchProcess(pid)
+        # Typical cmdline: ['/path/to/python', 'main.py']
+        if len(cmdline) >= 2 and BOT_SCRIPT in cmdline[1]:
             return proc
-        os.remove(PID_FILE)
-        return None
-    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError, FileNotFoundError):
+        else:
+            # PID file is stale (wrong process)
+            logger.warning(f"PID file {PID_FILE} points to process {pid} which is not the bot. Removing stale PID file.")
+            os.remove(PID_FILE)
+            return None
+    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError, FileNotFoundError, ProcessLookupError):
         if os.path.exists(PID_FILE):
             os.remove(PID_FILE)
         return None

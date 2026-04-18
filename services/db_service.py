@@ -2,6 +2,12 @@ from database.connection import get_db_pool
 from typing import Optional, List, Dict, Any
 import asyncpg
 import re
+from datetime import datetime
+from utils.logger import get_logger
+from config.points import REP_POINTS, SCROLL_POINTS
+
+logger = get_logger(__name__)
+
 
 def extract_user_id_from_mention(mention: str) -> int:
     match = re.search(r'<@!?(\d+)>', mention)
@@ -49,6 +55,35 @@ class DBService:
             {', '.join(f"{k} = EXCLUDED.{k}" for k in kwargs)}
         """
         await DBService.execute(query, *values)
+
+    @staticmethod
+    async def get_community_guild_and_role(bot, staff_guild_id: int) -> tuple:
+        """
+        Retrieve the community guild object and player role ID from config.
+
+        Args:
+            bot: The Discord bot instance.
+            staff_guild_id: The ID of the staff server (guild where the command/config is).
+
+        Returns:
+            (community_guild, player_role_id) where community_guild is a discord.Guild or None.
+        Raises:
+            ValueError: If config is missing or invalid.
+        """
+        config = await DBService.get_guild_config(staff_guild_id)
+        if not config:
+            raise ValueError("No guild configuration found for this server.")
+        community_guild_id = config.get('community_guild_id')
+        if not community_guild_id:
+            raise ValueError("Community guild not configured. Use `/set_community_guild`.")
+        player_role_id = config.get('player_role_id')
+        if not player_role_id:
+            raise ValueError("Player role not configured. Use `/set_player_role`.")
+
+        community_guild = bot.get_guild(community_guild_id)
+        if not community_guild:
+            raise ValueError(f"Bot is not in the configured community guild (ID {community_guild_id}).")
+        return community_guild, player_role_id
 
     # Staff member management
     @staticmethod
@@ -183,7 +218,7 @@ class DBService:
             data['submitted_by'], data['scroll_type'], data['items_stored'], data['screenshot_urls']
         )
         return row['id']
-    
+
     # Approval actions
     @staticmethod
     async def approve_form(table: str, form_id: int, approver_id: int):
@@ -234,13 +269,20 @@ class DBService:
 
     # Reputation and leaderboards
     @staticmethod
-    async def add_reputation(staff_id: int, points: int, reason: str, form_type: str, form_id: int):
+    async def add_reputation(staff_id: int, points: int, reason: str, form_type: str, form_id: int, created_at: datetime = None):
         await DBService.ensure_staff_member(staff_id, "")
-        await DBService.execute(
-            "INSERT INTO reputation_log (staff_id, points, reason, form_type, form_id) "
-            "VALUES ($1, $2, $3, $4, $5)",
-            staff_id, points, reason, form_type, form_id
-        )
+        if created_at is None:
+            await DBService.execute(
+                "INSERT INTO reputation_log (staff_id, points, reason, form_type, form_id) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                staff_id, points, reason, form_type, form_id
+            )
+        else:
+            await DBService.execute(
+                "INSERT INTO reputation_log (staff_id, points, reason, form_type, form_id, created_at) "
+                "VALUES ($1, $2, $3, $4, $5, $6)",
+                staff_id, points, reason, form_type, form_id, created_at
+            )
         await DBService.execute(
             "UPDATE staff_member SET reputation = reputation + $1 WHERE discord_id = $2",
             points, staff_id
@@ -431,45 +473,78 @@ class DBService:
 
     @staticmethod
     async def refresh_all_reputation():
-        """Rebuild reputation_log and staff_member.reputation from all approved forms."""
+        """Rebuild reputation_log and staff_member.reputation from all approved forms, preserving original timestamps."""
         # Clear existing data
         await DBService.execute("TRUNCATE reputation_log")
         await DBService.execute("UPDATE staff_member SET reputation = 0")
+        logger.info("Cleared reputation_log and reset staff_member.reputation to 0.")
 
-        # Process each form table
+        # Process each form table (with original timestamps)
         form_config = [
-            ('recruitment', 7, 'recruitment'),
-            ('progress_report', 10, 'progress_report'),
-            ('purchase_invoice', 5, 'purchase_invoice'),
-            ('demolition_report', 3, 'demolition_report'),
-            ('demolition_request', 3, 'demolition_request'),
-            ('eviction_report', 2, 'eviction_report'),
-            ('scroll_completion', 5, 'scroll_completion')
+            ('recruitment', REP_POINTS['recruitment'], 'recruitment'),
+            ('progress_report', REP_POINTS['progress_report'], 'progress_report'),
+            ('purchase_invoice', REP_POINTS['purchase_invoice'], 'purchase_invoice'),
+            ('demolition_report', REP_POINTS['demolition_report'], 'demolition_report'),
+            ('demolition_request', REP_POINTS['demolition_request'], 'demolition_request'),
+            ('eviction_report', REP_POINTS['eviction_report'], 'eviction_report'),
         ]
         for table, points, form_type in form_config:
             rows = await DBService.fetch(
-                f"SELECT id, submitted_by, approved_by, approved_at FROM {table} WHERE status = 'approved'"
+                f"SELECT id, submitted_by, approved_by, submitted_at, approved_at FROM {table} WHERE status = 'approved'"
             )
+            logger.info(f"Processing {len(rows)} approved rows from {table} ({points} pts each)")
             for row in rows:
-                # Submitter points
+                # Submitter points with original submission timestamp
                 await DBService.add_reputation(
-                    row['submitted_by'], points, f"Submitted {form_type}", form_type, row['id']
+                    row['submitted_by'], points, f"Submitted {form_type}", form_type, row['id'],
+                    created_at=row['submitted_at']
                 )
-                # Approver points
-                if row['approved_by']:
+                # Approver points with original approval timestamp
+                if row['approved_by'] and row['approved_at']:
                     await DBService.add_reputation(
-                        row['approved_by'], 2, f"Approved {form_type}", f"{form_type}_approval", row['id']
+                        row['approved_by'], REP_POINTS['approval'],
+                        f"Approved {form_type}", f"{form_type}_approval", row['id'],
+                        created_at=row['approved_at']
                     )
-        # Process progress_help from helper mentions
-        help_rows = await DBService.fetch(
-            "SELECT id, helper_mentions FROM progress_report WHERE status = 'approved' AND helper_mentions IS NOT NULL"
+
+        # Process scroll_completion with variable points and timestamps
+        scroll_rows = await DBService.fetch(
+            "SELECT id, submitted_by, approved_by, scroll_type, submitted_at, approved_at "
+            "FROM scroll_completion WHERE status = 'approved'"
         )
+        logger.info(f"Processing {len(scroll_rows)} approved scroll completions")
+        for row in scroll_rows:
+            scroll_type = (row['scroll_type'] or '').lower()
+            points = SCROLL_POINTS.get(scroll_type, REP_POINTS['scroll_completion'])
+            logger.debug(f"Scroll #{row['id']} type '{scroll_type}' -> {points} pts")
+            await DBService.add_reputation(
+                row['submitted_by'], points, f"Submitted scroll_completion",
+                'scroll_completion', row['id'],
+                created_at=row['submitted_at']
+            )
+            if row['approved_by'] and row['approved_at']:
+                await DBService.add_reputation(
+                    row['approved_by'], REP_POINTS['approval'],
+                    f"Approved scroll_completion", 'scroll_completion_approval', row['id'],
+                    created_at=row['approved_at']
+                )
+
+        # Process progress_help from helper mentions (use progress report's submitted_at)
+        help_rows = await DBService.fetch(
+            "SELECT id, helper_mentions, submitted_at FROM progress_report "
+            "WHERE status = 'approved' AND helper_mentions IS NOT NULL"
+        )
+        logger.info(f"Processing {len(help_rows)} helper mentions ({REP_POINTS['progress_help']} pts each)")
         for row in help_rows:
             helper_id = extract_user_id_from_mention(row['helper_mentions'])
             if helper_id:
                 await DBService.add_reputation(
-                    helper_id, 10, f"Helped in progress report {row['id']}", 'progress_help', row['id']
+                    helper_id, REP_POINTS['progress_help'],
+                    f"Helped in progress report {row['id']}", 'progress_help', row['id'],
+                    created_at=row['submitted_at']
                 )
+
+        logger.info("Reputation refresh completed (historical timestamps preserved).")
 
     # Internal role management
     @staticmethod

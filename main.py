@@ -19,7 +19,8 @@ from cogs.admin import AdminCog
 from cogs.approval import ApprovalCog
 from cogs.leaderboard_stats import LeaderboardStatsCog
 from cogs.form_edit import FormEditCog
-from utils.views import ApprovalView  # <-- Import for persistent registration
+from cogs.lookup import LookupCog
+from utils.views import ApprovalView
 
 # Configure logging before anything else
 setup_logging(debug=False)
@@ -61,6 +62,7 @@ class TownyBot(commands.Bot):
         await self.add_cog(ApprovalCog(self))
         await self.add_cog(LeaderboardStatsCog(self))
         await self.add_cog(FormEditCog(self))
+        await self.add_cog(LookupCog(self))      # <-- Register lookup cog
 
         # Register persistent ApprovalView for handling button interactions after restart
         # We register a single generic view; it will reconstruct form data from custom_id on interaction

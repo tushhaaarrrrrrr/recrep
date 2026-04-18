@@ -1,20 +1,9 @@
 from services.db_service import DBService
 from utils.logger import get_logger
+from config.points import REP_POINTS, SCROLL_POINTS
 import re
 
 logger = get_logger(__name__)
-
-REP_POINTS = {
-    'recruitment': 7,
-    'progress_report': 10,
-    'progress_help': 10,
-    'purchase_invoice': 5,
-    'demolition_report': 3,
-    'demolition_request': 3,
-    'eviction_report': 2,
-    'scroll_completion': 5,
-    'approval': 2
-}
 
 
 def extract_user_id_from_mention(mention: str) -> int:
@@ -25,9 +14,12 @@ def extract_user_id_from_mention(mention: str) -> int:
     return None
 
 
-async def award_submitter_points(submitter_id: int, form_type: str, form_id: int):
-    """Award points to the form submitter upon approval."""
-    points = REP_POINTS.get(form_type, 0)
+async def award_submitter_points(submitter_id: int, form_type: str, form_id: int, points_override: int = None):
+    """
+    Award points to the form submitter upon approval.
+    If points_override is provided, it will be used instead of the default from REP_POINTS.
+    """
+    points = points_override if points_override is not None else REP_POINTS.get(form_type, 0)
     if points:
         await DBService.add_reputation(
             submitter_id, points, f"Submitted {form_type}", form_type, form_id

@@ -2,7 +2,10 @@ import discord
 from discord import ButtonStyle
 from datetime import datetime, timezone
 from services.db_service import DBService
-from services.reputation_service import award_submitter_points, award_helper_points, award_approval_points
+from services.reputation_service import (
+    award_submitter_points, award_helper_points, award_approval_points,
+    extract_user_id_from_mention, SCROLL_POINTS, REP_POINTS
+)
 from services.thread_manager import ThreadManager
 from services.s3_service import delete_image
 from utils.logger import get_logger
@@ -170,6 +173,106 @@ class ApprovalView(discord.ui.View):
             for url in urls_str.split(','):
                 await delete_image(url)
             logger.info(f"Deleted images for form {self.form_id}")
+
+    async def _assign_player_role(self, interaction: discord.Interaction) -> tuple[bool, str]:
+        """
+        Assign the configured player role and set nickname in the community server
+        for the recruited player.
+
+        Returns:
+            (success: bool, message: str) indicating outcome.
+        """
+        if not self.form_data:
+            self.form_data = await self._fetch_form_details()
+
+        discord_username = self.form_data.get('discord_username')
+        if not discord_username:
+            logger.warning(f"Recruitment #{self.form_id} approved but no Discord username provided.")
+            return False, "No Discord username provided in the form."
+
+        user_id = extract_user_id_from_mention(discord_username)
+        if not user_id:
+            try:
+                user_id = int(discord_username.strip())
+            except ValueError:
+                logger.warning(f"Could not extract user ID from '{discord_username}'.")
+                return False, f"Invalid Discord username format: '{discord_username}'."
+
+        try:
+            community_guild, player_role_id = await DBService.get_community_guild_and_role(
+                interaction.client, self.guild_id
+            )
+        except ValueError as e:
+            logger.error(f"Configuration error for role assignment: {e}")
+            return False, f"Configuration error: {e}"
+
+        role = community_guild.get_role(player_role_id)
+        if not role:
+            logger.error(f"Player role ID {player_role_id} not found in community guild {community_guild.name}.")
+            return False, f"Configured player role (ID {player_role_id}) not found in the community server."
+
+        try:
+            member = await community_guild.fetch_member(user_id)
+        except discord.NotFound:
+            logger.warning(f"User {user_id} is not in community guild {community_guild.name}.")
+            return False, f"User <@{user_id}> is not a member of the community server."
+        except discord.Forbidden:
+            logger.error(f"Bot lacks permission to fetch members in community guild {community_guild.name}.")
+            return False, "Bot lacks 'Server Members Intent' or 'View Channel' permission in community server."
+        except Exception as e:
+            logger.exception(f"Unexpected error fetching member {user_id}: {e}")
+            return False, f"Unexpected error fetching member: {e}"
+
+        role_success = False
+        nickname_success = False
+        role_error = ""
+        nick_error = ""
+
+        # Assign role
+        try:
+            await member.add_roles(role, reason=f"Recruitment approved (form #{self.form_id})")
+            logger.info(f"Assigned role {role.name} to {member.display_name} ({member.id}).")
+            role_success = True
+        except discord.Forbidden:
+            role_error = "Bot lacks 'Manage Roles' permission in community server."
+            logger.error(role_error)
+        except Exception as e:
+            role_error = f"Failed to assign role: {e}"
+            logger.exception(role_error)
+
+        # Change nickname
+        nickname = self.form_data.get('nickname', '').strip()
+        if nickname:
+            try:
+                await member.edit(nick=nickname, reason=f"Recruitment approved (form #{self.form_id})")
+                logger.info(f"Set nickname of {member.id} to '{nickname}'.")
+                nickname_success = True
+            except discord.Forbidden:
+                nick_error = "Bot lacks 'Manage Nicknames' permission."
+                logger.error(nick_error)
+            except Exception as e:
+                nick_error = f"Failed to set nickname: {e}"
+                logger.exception(nick_error)
+
+        # Build result message
+        messages = []
+        if role_success:
+            messages.append(f"✅ Role '{role.name}' assigned.")
+        elif role_error:
+            messages.append(f"❌ Role not assigned: {role_error}")
+
+        if nickname_success:
+            messages.append(f"✅ Nickname set to '{nickname}'.")
+        elif nick_error:
+            messages.append(f"❌ Nickname not set: {nick_error}")
+
+        if not messages:
+            messages.append("ℹ️ No role or nickname changes attempted.")
+
+        result_msg = " ".join(messages)
+        success = role_success  # primary success is role assignment
+
+        return success, result_msg
 
     async def _send_notification(self, guild: discord.Guild, approver: discord.Member):
         config = await DBService.get_guild_config(self.guild_id)
@@ -434,21 +537,39 @@ class ApprovalView(discord.ui.View):
 
         try:
             if approve:
-                await award_submitter_points(self.submitter_id, self.form_type, self.form_id)
+                # Determine submitter points (with possible override for scrolls)
+                points_override = None
+                if self.table == 'scroll_completion':
+                    scroll_type = (self.form_data or {}).get('scroll_type', '').lower()
+                    points_override = SCROLL_POINTS.get(scroll_type, REP_POINTS.get('scroll_completion', 5))
+
+                await award_submitter_points(self.submitter_id, self.form_type, self.form_id, points_override)
+
                 if self.form_type == 'progress_report' and self.form_data:
                     helper_mention = self.form_data.get('helper_mentions')
                     if helper_mention:
                         await award_helper_points(helper_mention, self.form_id)
                 await award_approval_points(interaction.user.id, self.form_type, self.form_id)
                 await DBService.approve_form(self.table, self.form_id, interaction.user.id)
-                await self._send_notification(interaction.guild, interaction.user)
 
+                # Cross-server role assignment for recruitment approvals
+                role_result_msg = ""
+                if self.table == 'recruitment':
+                    try:
+                        success, role_result_msg = await self._assign_player_role(interaction)
+                    except Exception as e:
+                        logger.exception(f"Unexpected error in role assignment for recruitment #{self.form_id}: {e}")
+                        role_result_msg = f"❌ Unexpected error during role assignment: {e}"
+
+                await self._send_notification(interaction.guild, interaction.user)
                 await self._cleanup_messages(interaction)
 
-                await interaction.followup.send(
-                    f"✅ **Form {display_id} approved** by {interaction.user.display_name}.",
-                    ephemeral=True
-                )
+                # Build final confirmation message
+                base_msg = f"✅ **Form {display_id} approved** by {interaction.user.display_name}."
+                if role_result_msg:
+                    base_msg += f"\n{role_result_msg}"
+
+                await interaction.followup.send(base_msg, ephemeral=True)
             elif hold:
                 await DBService.hold_form(self.table, self.form_id)
                 for child in self.children:

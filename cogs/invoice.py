@@ -23,8 +23,8 @@ class InvoiceCog(commands.Cog):
         description="Submit a purchase invoice for plot sales or mall shop purchases"
     )
     @app_commands.describe(
-        purchasee_nickname="Discord nickname of the buyer",
-        purchasee_ingame="Minecraft username of the buyer",
+        buyer_nickname="Discord nickname of the buyer",
+        buyer_ingame="Minecraft username of the buyer",
         purchase_type="Type of purchase: `premium`, `normal`, `staff`, or `mall_shop`",
         amount_deposited="Amount of coins deposited to the town bank",
         num_plots="Number of plots sold (for plot purchases)",
@@ -40,8 +40,8 @@ class InvoiceCog(commands.Cog):
     async def invoice_submit(
         self,
         interaction: discord.Interaction,
-        purchasee_nickname: str,
-        purchasee_ingame: str,
+        buyer_nickname: str,
+        buyer_ingame: str,
         purchase_type: str,
         amount_deposited: float,
         screenshot1: discord.Attachment = None,
@@ -74,8 +74,8 @@ class InvoiceCog(commands.Cog):
                 'submitted_by': interaction.user.id,
                 'submitter_display': interaction.user.display_name,
                 'seller_display': interaction.user.display_name,
-                'purchasee_nickname': purchasee_nickname,
-                'purchasee_ingame': purchasee_ingame,
+                'purchasee_nickname': buyer_nickname,   # DB field remains 'purchasee_nickname'
+                'purchasee_ingame': buyer_ingame,       # DB field remains 'purchasee_ingame'
                 'purchase_type': purchase_type,
                 'num_plots': num_plots,
                 'total_plots': total_plots,
@@ -89,8 +89,8 @@ class InvoiceCog(commands.Cog):
             logger.info(f"Invoice #{form_id} submitted by {interaction.user.id}")
 
             form_data = {
-                'purchasee_nickname': purchasee_nickname,
-                'purchasee_ingame': purchasee_ingame,
+                'purchasee_nickname': buyer_nickname,
+                'purchasee_ingame': buyer_ingame,
                 'amount_deposited': amount_deposited,
                 'purchase_type': purchase_type,
                 'num_plots': num_plots,
@@ -115,7 +115,7 @@ class InvoiceCog(commands.Cog):
                         timestamp=discord.utils.utcnow()
                     )
                     embed.add_field(name="Seller", value=interaction.user.display_name, inline=True)
-                    embed.add_field(name="Buyer", value=f"{purchasee_nickname} ({purchasee_ingame})", inline=True)
+                    embed.add_field(name="Buyer", value=f"{buyer_nickname} ({buyer_ingame})", inline=True)
                     embed.add_field(name="Type", value=purchase_type, inline=True)
                     embed.add_field(name="Amount", value=f"{amount_deposited} coins", inline=True)
 

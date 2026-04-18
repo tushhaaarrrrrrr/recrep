@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS guild_config (
     invoice_channel_id BIGINT,
     demolition_channel_id BIGINT,
     eviction_channel_id BIGINT,
-    scroll_channel_id BIGINT
+    scroll_channel_id BIGINT,
+    community_guild_id BIGINT,
+    player_role_id BIGINT
 );
 
 -- Internal staff roles
