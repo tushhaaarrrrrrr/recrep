@@ -34,21 +34,30 @@ logger = get_logger(__name__)
 _start_lock = threading.Lock()
 
 # ── Async event loop ──────────────────────────────────────────────────────────
-_db_pool    = None
+_db_pool = None
 _event_loop = None
 _pool_ready = threading.Event()
+_pool_init_error = None
 
 async def _init_global_pool():
-    global _db_pool
-    _db_pool = await init_db_pool()
-    _pool_ready.set()
+    global _db_pool, _pool_init_error
+    try:
+        _db_pool = await init_db_pool()
+    except Exception as exc:
+        _pool_init_error = exc
+        _db_pool = None
+        logger.exception("Database pool initialisation failed")
+    finally:
+        _pool_ready.set()
 
 def _start_async_loop():
     global _event_loop
     _event_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_event_loop)
-    _event_loop.run_until_complete(_init_global_pool())
-    _event_loop.run_forever()
+    try:
+        _event_loop.run_until_complete(_init_global_pool())
+    finally:
+        _event_loop.run_forever()
 
 def run_async(coro):
     if _event_loop is None:
@@ -60,6 +69,8 @@ _loop_thread.start()
 # Wait properly for the pool to be ready
 if not _pool_ready.wait(timeout=30):
     raise RuntimeError("Database pool did not initialise within 30 seconds")
+if _pool_init_error is not None:
+    raise RuntimeError(f"Database pool initialisation failed: {_pool_init_error}") from _pool_init_error
 
 # ── Bot process management ────────────────────────────────────────────────────
 def _get_bot_process():

@@ -2,7 +2,7 @@ import asyncio
 import asyncpg
 import sys
 from pathlib import Path
-from config.settings import DATABASE_URL, DIRECT_URL
+from config.settings import MIGRATION_DATABASE_URL
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -16,7 +16,7 @@ async def init():
             sys.exit(1)
 
         logger.info("Connecting to database...")
-        conn = await asyncpg.connect(DIRECT_URL or DATABASE_URL)
+        conn = await asyncpg.connect(MIGRATION_DATABASE_URL)
 
         with open(schema_path, 'r') as f:
             sql = f.read()
