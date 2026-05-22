@@ -362,6 +362,7 @@ class DBService:
     @staticmethod
     async def get_mall_shop_alerts(today=None) -> Dict[str, List[Dict]]:
         today = today or datetime.utcnow().date()
+
         due_rows = await DBService.fetch(
             """
             SELECT id, submitted_by, submitted_at, ingame_name, discord_nickname, amount_of_shops, total_amount,
@@ -370,12 +371,13 @@ class DBService:
             FROM mall_shop
             WHERE status = 'approved'
               AND next_due_date IS NOT NULL
-              AND next_due_date = $1
+              AND next_due_date = $1::date
               AND COALESCE(last_due_alert_for, DATE '1970-01-01') <> next_due_date
             ORDER BY next_due_date, submitted_at
             """,
             today
         )
+
         overdue_rows = await DBService.fetch(
             """
             SELECT id, submitted_by, submitted_at, ingame_name, discord_nickname, amount_of_shops, total_amount,
@@ -384,12 +386,13 @@ class DBService:
             FROM mall_shop
             WHERE status = 'approved'
               AND next_due_date IS NOT NULL
-              AND next_due_date <= ($1 - 3)
+              AND next_due_date <= ($1::date - 3)
               AND COALESCE(last_overdue_alert_for, DATE '1970-01-01') <> next_due_date
             ORDER BY next_due_date, submitted_at
             """,
             today
         )
+
         return {
             'due': [dict(r) for r in due_rows],
             'overdue': [dict(r) for r in overdue_rows],
