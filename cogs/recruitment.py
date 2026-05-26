@@ -68,6 +68,7 @@ class RecruitmentCog(commands.Cog):
                 screenshot3,
                 screenshot4,
                 screenshot5,
+                required=False,
             )
             if screenshot_urls is None:
                 return
