@@ -13,6 +13,7 @@ from database.connection import get_db_pool
 from utils.logger import get_logger
 from config.settings import OWNER_ID
 from utils.views import send_approval_notification, assign_player_role_post_approval, ApprovalView
+from config.forms import FORM_CHANNEL_KEY, FORM_TABLE_PREFIX, FORM_THREAD_LABEL
 import time
 import sys
 
@@ -21,12 +22,13 @@ logger = get_logger(__name__)
 class AdminCog(commands.Cog):
     """Administrator commands for configuration and role management."""
 
-    _VALID_ROLES = ['admin', 'comayor', 'builder', 'recruiter']
+    _VALID_ROLES = ['admin', 'comayor', 'builder', 'recruiter', 'supplier']
     _CHANNEL_KEYS = {
         'Recruitment': 'recruitment_channel_id',
         'Progress': 'progress_channel_id',
         'Invoice': 'invoice_channel_id',
         'Mall Shop': 'mall_shop_channel_id',
+        'Supplier': 'supplier_channel_id',
         'Demolition': 'demolition_channel_id',
         'Eviction': 'eviction_channel_id',
         'Scroll': 'scroll_channel_id'
@@ -38,16 +40,6 @@ class AdminCog(commands.Cog):
     }
 
     # Mapping from internal table name to the config key for that form's log channel
-    _FORM_CHANNEL_MAP = {
-        'recruitment':        'recruitment_channel_id',
-        'progress_report':    'progress_channel_id',
-        'purchase_invoice':   'invoice_channel_id',
-        'mall_shop':          'mall_shop_channel_id',
-        'demolition_report':  'demolition_channel_id',
-        'demolition_request': 'demolition_channel_id',
-        'eviction_report':    'eviction_channel_id',
-        'scroll_completion':  'scroll_channel_id',
-    }
 
     def __init__(self, bot):
         self.bot = bot
@@ -211,7 +203,7 @@ class AdminCog(commands.Cog):
 
                 await interaction.followup.send(msg)
             except Exception as e:
-                logger.exception(f"Failed to {action.value} role {role} for {member.id}")
+                logger.exception("Failed to update role assignment")
                 await interaction.followup.send("❌ An internal error occurred. Check logs for details.")
 
         # ── list ──
@@ -286,6 +278,7 @@ class AdminCog(commands.Cog):
             "Progress Logs": config.get("progress_channel_id") if config else None,
             "Invoice Logs": config.get("invoice_channel_id") if config else None,
             "Mall Shop Logs": config.get("mall_shop_channel_id") if config else None,
+            "Supplier Logs": config.get("supplier_channel_id") if config else None,
             "Demolition Logs": config.get("demolition_channel_id") if config else None,
             "Eviction Logs": config.get("eviction_channel_id") if config else None,
             "Scroll Logs": config.get("scroll_channel_id") if config else None
@@ -416,7 +409,7 @@ class AdminCog(commands.Cog):
                 ephemeral=True
             )
         except Exception as e:
-            logger.exception(f"Failed to recalculate reputation: {e}")
+            logger.exception('Failed to recalculate reputation: ')
             await interaction.followup.send("❌ An error occurred while recalculating reputation.", ephemeral=True)
 
     @app_commands.command(
@@ -434,7 +427,7 @@ class AdminCog(commands.Cog):
                 ephemeral=True
             )
         except Exception as e:
-            logger.exception(f"Failed to refresh stats: {e}")
+            logger.exception('Failed to refresh stats: ')
             await interaction.followup.send(
                 "❌ An error occurred while refreshing statistics.",
                 ephemeral=True
@@ -512,7 +505,7 @@ class AdminCog(commands.Cog):
                     form_data = await DBService.get_full_form_data(table, form_id) or form_data
 
                 # Notification + role assignment
-                channel_config_key = self._FORM_CHANNEL_MAP.get(table)
+                channel_config_key = FORM_CHANNEL_KEY.get(table)
                 if not channel_config_key:
                     raise ValueError(f"No channel config mapping for table {table}")
 
@@ -571,7 +564,7 @@ class AdminCog(commands.Cog):
 
                 approved_count += 1
             except Exception as e:
-                logger.exception(f"Failed to process {table}#{form_id}: {e}")
+                logger.exception('Failed to process {table}#{form_id}: ')
                 failed_count += 1
 
         result_msg = (

@@ -2,18 +2,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from services.db_service import DBService
-from services.s3_service import upload_image
+from utils.helpers import upload_attachments, validate_text_field
 from utils.views import ApprovalView
+from utils.form_embeds import build_submission_embed
 from utils.logger import get_logger
+from config.forms import display_id as make_display_id
 
 logger = get_logger(__name__)
 
 class EvictionCog(commands.Cog):
     """Commands for submitting eviction reports."""
-
-    _TABLE_PREFIX = {
-        'eviction_report': 'evc'
-    }
 
     def __init__(self, bot):
         self.bot = bot
@@ -50,19 +48,26 @@ class EvictionCog(commands.Cog):
             return
 
         try:
-            screenshots = [s for s in (screenshot1, screenshot2, screenshot3, screenshot4, screenshot5) if s]
-            if not screenshots:
-                await interaction.followup.send(
-                    "❌ At least one screenshot is required. Please attach an image.",
-                    ephemeral=True
-                )
+            for err in filter(None, [
+                validate_text_field(ingame_owner, 'In-game Owner', 64),
+                validate_text_field(inactivity_period, 'Inactivity Period', 64),
+                validate_text_field(items_stored, 'Items Stored', 8),
+            ]):
+                await interaction.followup.send(f'❌ {err}', ephemeral=True)
                 return
-
-            screenshot_urls = []
-            for img in screenshots:
-                img_bytes = await img.read()
-                url = await upload_image(img_bytes, img.filename)
-                screenshot_urls.append(url)
+            if items_stored.strip().lower() not in {'yes', 'no'}:
+                await interaction.followup.send('❌ **Items Stored** must be `yes` or `no`.', ephemeral=True)
+                return
+            screenshot_urls = await upload_attachments(
+                interaction,
+                screenshot1,
+                screenshot2,
+                screenshot3,
+                screenshot4,
+                screenshot5,
+            )
+            if screenshot_urls is None:
+                return
 
             data = {
                 'submitted_by': interaction.user.id,
@@ -83,8 +88,7 @@ class EvictionCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
-            prefix = self._TABLE_PREFIX['eviction_report']
-            display_id = f"{prefix}_{form_id}"
+            display_id = make_display_id("eviction_report", form_id)
 
             confirm_msg = await interaction.followup.send(f"✅ Eviction report `{display_id}` submitted - pending approval.")
 
@@ -92,22 +96,7 @@ class EvictionCog(commands.Cog):
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
                 if approval_channel:
-                    embed = discord.Embed(
-                        title="Eviction Report",
-                        color=discord.Color.dark_red(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.add_field(name="Submitter", value=interaction.user.display_name, inline=True)
-                    embed.add_field(name="Owner", value=ingame_owner, inline=True)
-                    embed.add_field(name="Items Stored", value=items_stored, inline=True)
-                    embed.add_field(name="Inactivity Period", value=inactivity_period, inline=True)
-
-                    if screenshot_urls:
-                        embed.set_image(url=screenshot_urls[0])
-                        if len(screenshot_urls) > 1:
-                            embed.add_field(name="Additional Screenshots", value=f"{len(screenshot_urls)-1} more", inline=False)
-
-                    embed.set_footer(text=f"Form ID: {display_id}")
+                    embed = build_submission_embed('eviction_report', form_data, form_id=form_id, submitter_name=interaction.user.display_name)
 
                     view = ApprovalView(
                         table='eviction_report',
@@ -131,7 +120,7 @@ class EvictionCog(commands.Cog):
                     )
 
         except Exception as e:
-            logger.exception(f"Error in eviction_submit: {e}")
+            logger.exception("Error in eviction_submit")
             await interaction.followup.send(
                 "❌ An error occurred while submitting the eviction report. Please try again later.",
                 ephemeral=True

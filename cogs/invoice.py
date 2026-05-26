@@ -2,18 +2,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from services.db_service import DBService
-from services.s3_service import upload_image
+from utils.helpers import upload_attachments, validate_text_field, validate_numeric_field
 from utils.views import ApprovalView
+from utils.form_embeds import build_submission_embed
 from utils.logger import get_logger
+from config.forms import display_id as make_display_id
 
 logger = get_logger(__name__)
 
 class InvoiceCog(commands.Cog):
     """Commands for submitting purchase invoices (plots, mall shops, or spawn houses)."""
-
-    _TABLE_PREFIX = {
-        'purchase_invoice': 'inv'
-    }
 
     def __init__(self, bot):
         self.bot = bot
@@ -62,6 +60,18 @@ class InvoiceCog(commands.Cog):
             return
 
         try:
+            for err in filter(None, [
+                validate_text_field(buyer_nickname, 'Buyer Nickname', 64),
+                validate_text_field(buyer_ingame, 'Buyer In-game', 64),
+                validate_text_field(banner_color, 'Banner Color', 32) if banner_color else None,
+                validate_text_field(str(shop_number), 'Shop Number', 16) if shop_number is not None else None,
+                validate_numeric_field(amount_deposited, 'Amount Deposited', minimum=0),
+            ]):
+                await interaction.followup.send(f'❌ {err}', ephemeral=True)
+                return
+            if purchase_type.strip().lower() not in {'premium', 'normal', 'staff', 'spawn_house', 'mall_shop'}:
+                await interaction.followup.send('❌ Invalid purchase type.', ephemeral=True)
+                return
             if purchase_type.strip().lower() == 'mall_shop':
                 await interaction.followup.send(
                     '❌ Mall shop records now use `/mall_shop`. Please use that command instead.',
@@ -69,19 +79,16 @@ class InvoiceCog(commands.Cog):
                 )
                 return
 
-            screenshots = [s for s in (screenshot1, screenshot2, screenshot3, screenshot4, screenshot5) if s]
-            if not screenshots:
-                await interaction.followup.send(
-                    "❌ **At least one screenshot is required.** Please attach an image.",
-                    ephemeral=True
-                )
+            screenshot_urls = await upload_attachments(
+                interaction,
+                screenshot1,
+                screenshot2,
+                screenshot3,
+                screenshot4,
+                screenshot5,
+            )
+            if screenshot_urls is None:
                 return
-
-            screenshot_urls = []
-            for img in screenshots:
-                img_bytes = await img.read()
-                url = await upload_image(img_bytes, img.filename)
-                screenshot_urls.append(url)
 
             data = {
                 'submitted_by': interaction.user.id,
@@ -116,8 +123,7 @@ class InvoiceCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
-            prefix = self._TABLE_PREFIX['purchase_invoice']
-            display_id = f"{prefix}_{form_id}"
+            display_id = make_display_id("purchase_invoice", form_id)
 
             confirm_msg = await interaction.followup.send(f"✅ Invoice `{display_id}` submitted - pending approval.")
 
@@ -125,41 +131,7 @@ class InvoiceCog(commands.Cog):
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
                 if approval_channel:
-                    embed = discord.Embed(
-                        title="Purchase Invoice",
-                        color=discord.Color.gold(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.add_field(name="Seller", value=interaction.user.display_name, inline=True)
-                    embed.add_field(name="Buyer", value=f"{buyer_nickname} ({buyer_ingame})", inline=True)
-                    embed.add_field(name="Type", value=purchase_type, inline=True)
-                    embed.add_field(name="Amount", value=f"{amount_deposited} coins", inline=True)
-
-                    if num_plots:
-                        embed.add_field(
-                            name="Plots",
-                            value=f"{num_plots} (total after: {total_plots})",
-                            inline=True
-                        )
-                    if banner_color:
-                        embed.add_field(
-                            name="Mall Shop",
-                            value=f"Color: {banner_color} · #{shop_number}",
-                            inline=True
-                        )
-                    if purchase_type == "spawn_house" and house_number:
-                        embed.add_field(
-                            name="Spawn House",
-                            value=f"House #{house_number}",
-                            inline=True
-                        )
-
-                    if screenshot_urls:
-                        embed.set_image(url=screenshot_urls[0])
-                        if len(screenshot_urls) > 1:
-                            embed.add_field(name="Additional Screenshots", value=f"{len(screenshot_urls)-1} more", inline=False)
-
-                    embed.set_footer(text=f"Form ID: {display_id}")
+                    embed = build_submission_embed('purchase_invoice', form_data, form_id=form_id, submitter_name=interaction.user.display_name)
 
                     view = ApprovalView(
                         table='purchase_invoice',
@@ -183,7 +155,7 @@ class InvoiceCog(commands.Cog):
                     )
 
         except Exception as e:
-            logger.exception(f"Error in invoice_submit: {e}")
+            logger.exception("Error in invoice_submit")
             await interaction.followup.send(
                 "❌ An error occurred while submitting the invoice. Please try again later.",
                 ephemeral=True

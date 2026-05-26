@@ -17,6 +17,7 @@ RESET_TABLES = [
     "demolition_report",
     "purchase_invoice",
     "mall_shop",
+    "supplier",
     "progress_report",
     "recruitment"
 ]

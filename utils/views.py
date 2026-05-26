@@ -6,25 +6,14 @@ from services.reputation_service import (
     award_submitter_points, award_helper_points, award_approval_points,
     extract_user_id_from_mention, SCROLL_POINTS, REP_POINTS
 )
+from config.forms import FORM_CHANNEL_KEY, FORM_TABLE_PREFIX, FORM_THREAD_LABEL, FormStatus, display_id
 from services.thread_manager import ThreadManager
 from services.s3_service import delete_image
+from utils.form_embeds import build_approval_embed, build_summary
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# ── Shared helpers for post-approval actions (used by both ApprovalView and bulk command) ──
-
-# Correct channel-config keys for every form table
-_FORM_CHANNEL_MAP = {
-    'recruitment':        'recruitment_channel_id',
-    'progress_report':    'progress_channel_id',
-    'purchase_invoice':   'invoice_channel_id',
-    'mall_shop':          'mall_shop_channel_id',
-    'demolition_report':  'demolition_channel_id',
-    'demolition_request': 'demolition_channel_id',
-    'eviction_report':    'eviction_channel_id',
-    'scroll_completion':  'scroll_channel_id',
-}
 
 async def send_approval_notification(bot, guild, table, form_id, form_data,
                                     submitter_id, approver, channel_config_key, thread_prefix):
@@ -32,174 +21,28 @@ async def send_approval_notification(bot, guild, table, form_id, form_data,
     config = await DBService.get_guild_config(guild.id)
     if not config:
         return
-    channel_id = config.get(channel_config_key)
+    channel_id = config.get(channel_config_key) or config.get('approval_channel_id')
     if not channel_id:
         return
 
-    submitter = guild.get_member(submitter_id)
-    submitter_name = submitter.display_name if submitter else f"User {submitter_id}"
-    now_utc = datetime.now(timezone.utc)
-    timestamp_str = now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
+    submitter_name = str(submitter_id)
+    if form_data:
+        submitter_name = str(form_data.get('submitter_display') or form_data.get('discord_nickname') or submitter_id)
 
-    prefix_map = {
-        'recruitment': 'rec', 'progress_report': 'rep', 'purchase_invoice': 'inv',
-        'mall_shop': 'msh', 'demolition_report': 'dem', 'demolition_request': 'dmr',
-        'eviction_report': 'evc', 'scroll_completion': 'scr'
-    }
-    display_id = f"{prefix_map.get(table, 'unk')}_{form_id}"
-
-    screenshot_urls_str = form_data.get('screenshot_urls', '') if form_data else ''
-    url_list = screenshot_urls_str.split(',') if screenshot_urls_str else []
-    first_url = url_list[0] if url_list else None
-    extra_count = len(url_list) - 1 if url_list else 0
-
-    embed = discord.Embed(
-        title=f"✅ {table.replace('_', ' ').title()} Approved",
-        color=discord.Color.green(),
-        timestamp=now_utc
+    embed = build_approval_embed(
+        table,
+        form_data or {},
+        form_id=form_id,
+        submitter_name=submitter_name,
+        approver_name=approver.display_name,
+        approved_at=datetime.now(timezone.utc),
     )
-    embed.add_field(name="Submitted by", value=submitter_name, inline=True)
-    embed.add_field(name="Approved by", value=approver.display_name, inline=True)
-    embed.add_field(name="Form ID", value=display_id, inline=True)
-
-    # Form-specific details
-    if table == 'recruitment':
-        nickname = form_data.get('nickname', '?')
-        ingame = form_data.get('ingame_username', '?')
-        plots = form_data.get('plots', 0)
-        discord_user = form_data.get('discord_username')
-        age = form_data.get('age')
-        details = f"Recruited **{nickname}** ({ingame}) - {plots} plots"
-        if discord_user:
-            details += f"\n• Discord: {discord_user}"
-        if age:
-            details += f"\n• Age: {age}"
-        embed.add_field(name="Details", value=details, inline=False)
-        if first_url:
-            embed.set_image(url=first_url)
-            if extra_count > 0:
-                embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
-        embed.set_footer(text=f"Approved on {timestamp_str}")
-    elif table == 'progress_report':
-        project = form_data.get('project_name', '?')
-        time_spent = form_data.get('time_spent', '?')
-        helper = form_data.get('helper_mentions')
-        embed.add_field(name="Project", value=project, inline=False)
-        embed.add_field(name="Time Spent", value=time_spent, inline=True)
-        if helper:
-            embed.add_field(name="Helper", value=helper, inline=True)
-        if first_url:
-            embed.set_image(url=first_url)
-            if extra_count > 0:
-                embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
-        embed.set_footer(text=f"Approved on {timestamp_str}")
-    elif table == 'purchase_invoice':
-        buyer_nick = form_data.get('purchasee_nickname', '?')
-        buyer_ign = form_data.get('purchasee_ingame', '?')
-        amount = form_data.get('amount_deposited', 0)
-        purchase_type = form_data.get('purchase_type', '?')
-        num_plots = form_data.get('num_plots')
-        total_plots = form_data.get('total_plots')
-        banner_color = form_data.get('banner_color')
-        shop_number = form_data.get('shop_number')
-        house_number = form_data.get('house_number')
-        seller_display = form_data.get('seller_display', submitter_name)
-        embed.add_field(name="Seller", value=seller_display, inline=True)
-        embed.add_field(name="Buyer", value=f"{buyer_nick} ({buyer_ign})", inline=True)
-        embed.add_field(name="Type", value=purchase_type, inline=True)
-        embed.add_field(name="Amount", value=f"{amount} coins", inline=True)
-        if num_plots:
-            embed.add_field(name="Plots", value=f"{num_plots} (total: {total_plots})", inline=True)
-        if banner_color:
-            embed.add_field(name="Mall Shop", value=f"Color {banner_color} · #{shop_number}", inline=True)
-        if purchase_type == "spawn_house" and house_number:
-            embed.add_field(name="Spawn House", value=f"House #{house_number}", inline=True)
-        if first_url:
-            embed.set_image(url=first_url)
-            if extra_count > 0:
-                embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
-        embed.set_footer(text=f"Approved on {timestamp_str}")
-    elif table == 'mall_shop':
-        ingame_name = form_data.get('ingame_name', '?')
-        amount_of_shops = form_data.get('amount_of_shops', 0)
-        total_amount = form_data.get('total_amount', 0)
-        payment_frequency = form_data.get('payment_frequency', '?')
-        paid_periods = form_data.get('paid_periods', 1)
-        banner_color = form_data.get('banner_color')
-        shop_number = form_data.get('shop_number')
-        notes = form_data.get('notes')
-        paid_until = form_data.get('paid_until')
-        embed.add_field(name="In-Game Name", value=ingame_name, inline=True)
-        embed.add_field(name="Shops", value=str(amount_of_shops), inline=True)
-        embed.add_field(name="Total", value=f"{total_amount} coins", inline=True)
-        cycle_label = DBService._mall_shop_frequency_label(payment_frequency, paid_periods)
-        embed.add_field(name="Cycle", value=cycle_label, inline=True)
-        embed.add_field(name="Periods Paid", value=str(paid_periods), inline=True)
-        if banner_color:
-            embed.add_field(name="Banner Color", value=banner_color, inline=True)
-        if shop_number:
-            embed.add_field(name="Shop Number", value=str(shop_number), inline=True)
-        if notes:
-            embed.add_field(name="Notes", value=notes[:1000], inline=False)
-        if paid_until:
-            embed.add_field(name="Coverage Ends", value=str(paid_until), inline=True)
-        if first_url:
-            embed.set_image(url=first_url)
-            if extra_count > 0:
-                embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
-        embed.set_footer(text=f"Approved on {timestamp_str}")
-    elif table == 'demolition_report':
-        player = form_data.get('ingame_username', '?')
-        removed = form_data.get('removed', '?')
-        stashed = "Yes" if form_data.get('stashed_items') else "No"
-        embed.add_field(name="Player", value=player, inline=True)
-        embed.add_field(name="Removed", value=removed, inline=True)
-        embed.add_field(name="Items Stashed", value=stashed, inline=True)
-        if first_url:
-            embed.set_image(url=first_url)
-            if extra_count > 0:
-                embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
-        embed.set_footer(text=f"Approved on {timestamp_str}")
-    elif table == 'demolition_request':
-        player = form_data.get('ingame_username', '?')
-        reason = form_data.get('reason', '?')
-        embed.add_field(name="Target Player", value=player, inline=True)
-        embed.add_field(name="Reason", value=reason, inline=False)
-        if first_url:
-            embed.set_image(url=first_url)
-            if extra_count > 0:
-                embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
-        embed.set_footer(text=f"Approved on {timestamp_str}")
-    elif table == 'eviction_report':
-        owner = form_data.get('ingame_owner', '?')
-        items_stored = "Yes" if form_data.get('items_stored') else "No"
-        inactivity = form_data.get('inactivity_period', '?')
-        embed.add_field(name="Owner", value=owner, inline=True)
-        embed.add_field(name="Items Stored", value=items_stored, inline=True)
-        embed.add_field(name="Inactivity Period", value=inactivity, inline=True)
-        if first_url:
-            embed.set_image(url=first_url)
-            if extra_count > 0:
-                embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
-        embed.set_footer(text=f"Approved on {timestamp_str}")
-    elif table == 'scroll_completion':
-        scroll_type = form_data.get('scroll_type', '?').capitalize()
-        items_stored = "Yes" if form_data.get('items_stored') else "No"
-        embed.add_field(name="Scroll Type", value=scroll_type, inline=True)
-        embed.add_field(name="Items Stored", value=items_stored, inline=True)
-        if first_url:
-            embed.set_image(url=first_url)
-            if extra_count > 0:
-                embed.add_field(name="Additional Screenshots", value=f"{extra_count} more", inline=False)
-        embed.set_footer(text=f"Approved on {timestamp_str}")
 
     try:
         thread = await ThreadManager.get_or_create_monthly_thread(guild, channel_id, thread_prefix)
         await thread.send(embed=embed)
-    except Exception as e:
-        logger.error(f"Failed to send notification for {table}#{form_id}: {e}")
-
-
+    except Exception:
+        logger.exception("Failed to send notification for %s#%s", table, form_id)
 async def assign_player_role_post_approval(bot, guild_id, form_id, form_data):
     """Assign community server role and set nickname for a recruitment form (used by both interactive and bulk approval)."""
     discord_username = form_data.get('discord_username')
@@ -287,27 +130,8 @@ async def assign_player_role_post_approval(bot, guild_id, form_id, form_data):
 class ApprovalView(discord.ui.View):
     """Persistent view with Approve/Deny/Hold buttons for form approval."""
 
-    _TABLE_PREFIX = {
-        'recruitment': 'rec',
-        'progress_report': 'rep',
-        'purchase_invoice': 'inv',
-        'mall_shop': 'msh',
-        'demolition_report': 'dem',
-        'demolition_request': 'dmr',
-        'eviction_report': 'evc',
-        'scroll_completion': 'scr'
-    }
-
-    _THREAD_PREFIX = {
-        'recruitment': 'Recruitments',
-        'progress_report': 'Progress Reports',
-        'purchase_invoice': 'Invoices',
-        'mall_shop': 'Mall Shops',
-        'demolition_report': 'Demolitions',
-        'demolition_request': 'Demolition Requests',
-        'eviction_report': 'Evictions',
-        'scroll_completion': 'Scrolls'
-    }
+    _TABLE_PREFIX = FORM_TABLE_PREFIX
+    _THREAD_PREFIX = FORM_THREAD_LABEL
 
     def __init__(self, table: str, form_id: int, form_type: str, submitter_id: int,
                  guild_id: int, channel_config_key: str, thread_prefix: str,
@@ -333,8 +157,7 @@ class ApprovalView(discord.ui.View):
                 child.custom_id = f"{child.custom_id}_{table}_{form_id}"
 
     def _get_display_id(self) -> str:
-        prefix = self._TABLE_PREFIX.get(self.table, 'unk')
-        return f"{prefix}_{self.form_id}"
+        return display_id(self.table, self.form_id)
 
     async def _ensure_loaded_from_custom_id(self, interaction: discord.Interaction) -> bool:
         if not self.table or self.form_id == 0:
@@ -369,9 +192,7 @@ class ApprovalView(discord.ui.View):
                         self.resend_confirmation_channel_id = row.get('resend_confirmation_channel_id')
                         self.guild_id = interaction.guild_id
                         self.form_type = self.table
-                        self.channel_config_key = _FORM_CHANNEL_MAP.get(
-                            self.table, f"{self.table}_channel_id"
-                        )
+                        self.channel_config_key = FORM_CHANNEL_KEY.get(self.table, f"{self.table}_channel_id")
                         self.thread_prefix = self._THREAD_PREFIX.get(
                             self.table, self.table.replace('_', ' ').title()
                         )
@@ -412,7 +233,7 @@ class ApprovalView(discord.ui.View):
 
         status = row['status']
         # Allow interaction only for pending or held forms
-        if status not in ('pending', 'hold'):
+        if status not in (FormStatus.PENDING, FormStatus.HOLD):
             await interaction.response.send_message(
                 f"⚠️ This form has been **{status}**. No further actions allowed.",
                 ephemeral=True
@@ -434,7 +255,7 @@ class ApprovalView(discord.ui.View):
     async def _fetch_form_details(self) -> dict:
         columns = {
             'recruitment': ['submitted_by', 'ingame_username', 'nickname', 'plots', 'screenshot_urls', 'status', 'discord_username', 'age'],
-            'progress_report': ['submitted_by', 'project_name', 'time_spent', 'helper_mentions', 'screenshot_urls', 'status'],
+            'progress_report': ['submitted_by', 'project_name', 'time_spent', 'note', 'helper_mentions', 'screenshot_urls', 'status'],
             'purchase_invoice': ['submitted_by', 'seller_display', 'purchasee_nickname', 'purchasee_ingame',
                                  'purchase_type', 'num_plots', 'total_plots', 'banner_color', 'shop_number',
                                  'house_number', 'amount_deposited', 'screenshot_urls', 'status'],
@@ -442,6 +263,8 @@ class ApprovalView(discord.ui.View):
                           'payment_frequency', 'paid_periods', 'banner_color', 'shop_number', 'notes',
                           'paid_until', 'next_due_date', 'last_due_alert_for', 'last_overdue_alert_for',
                           'screenshot_urls', 'status'],
+            'supplier': ['submitted_by', 'supplied_item', 'quantity', 'difficulty_to_obtain', 'time_spent',
+                         'screenshot_urls', 'status'],
             'demolition_report': ['submitted_by', 'ingame_username', 'removed', 'stashed_items', 'screenshot_urls', 'status'],
             'demolition_request': ['submitted_by', 'ingame_username', 'reason', 'screenshot_urls', 'status'],
             'eviction_report': ['submitted_by', 'ingame_owner', 'items_stored', 'inactivity_period', 'screenshot_urls', 'status'],
@@ -462,49 +285,9 @@ class ApprovalView(discord.ui.View):
                 await delete_image(url)
             logger.info(f"Deleted images for form {self.form_id}")
 
-    # Note: _assign_player_role and _send_notification are kept but no longer called;
-    # the new free functions are used instead.
-
-    async def _assign_player_role(self, interaction: discord.Interaction) -> tuple[bool, str]:
-        """Legacy method - now unused but kept for compatibility."""
-        return False, "Deprecated"
-
-    async def _send_notification(self, guild: discord.Guild, approver: discord.Member):
-        """Legacy method - now unused but kept for compatibility."""
-        pass
-
+    # Shared approval helpers live at module scope.
     def _build_summary(self) -> str:
-        if not self.form_data:
-            return f"ID {self.form_id}"
-        if self.table == 'recruitment':
-            return (f"Recruited {self.form_data.get('nickname', '?')} "
-                    f"({self.form_data.get('ingame_username', '?')}) - "
-                    f"{self.form_data.get('plots', 0)} plots")
-        if self.table == 'progress_report':
-            return (f"Project '{self.form_data.get('project_name', '?')}' - "
-                    f"{self.form_data.get('time_spent', '?')}")
-        if self.table == 'purchase_invoice':
-            purchase_type = self.form_data.get('purchase_type', '?')
-            base = (f"Sale to {self.form_data.get('purchasee_nickname', '?')} for "
-                    f"{self.form_data.get('amount_deposited', 0)} coins")
-            if purchase_type == 'spawn_house' and self.form_data.get('house_number'):
-                base += f" (Spawn House #{self.form_data['house_number']})"
-            return base
-        if self.table == 'mall_shop':
-            return (f"Mall shop rent for {self.form_data.get('ingame_name', '?')} - "
-                    f"{self.form_data.get('amount_of_shops', 0)} shops / {self.form_data.get('total_amount', 0)} coins")
-        if self.table == 'demolition_report':
-            return (f"Demolished {self.form_data.get('ingame_username', '?')} - "
-                    f"{self.form_data.get('removed', '?')}")
-        if self.table == 'demolition_request':
-            reason = self.form_data.get('reason', '?')[:50]
-            return f"Request to demolish {self.form_data.get('ingame_username', '?')} - Reason: {reason}"
-        if self.table == 'eviction_report':
-            return (f"Evicted {self.form_data.get('ingame_owner', '?')} - "
-                    f"Inactive {self.form_data.get('inactivity_period', '?')}")
-        if self.table == 'scroll_completion':
-            return f"Scroll type: {self.form_data.get('scroll_type', '?')}"
-        return f"Form ID {self.form_id}"
+        return build_summary(self.table, self.form_data or {}, self.form_id)
 
     async def _cleanup_messages(self, interaction: discord.Interaction):
         """Delete all associated confirmation messages and the approval message itself."""
@@ -562,13 +345,13 @@ class ApprovalView(discord.ui.View):
         if current and self.form_data is None:
             self.form_data = current
 
-        if current_status in ('approved', 'denied'):
+        if current_status in (FormStatus.APPROVED, FormStatus.DENIED):
             await interaction.followup.send(
                 f"⚠️ This form has already been **{current_status}**. No further action needed.",
                 ephemeral=True
             )
             return
-        if hold and current_status == 'hold':
+        if hold and current_status == FormStatus.HOLD:
             await interaction.followup.send("⚠️ This form is already on hold.", ephemeral=True)
             return
 

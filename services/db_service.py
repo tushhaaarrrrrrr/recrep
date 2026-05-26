@@ -2,15 +2,16 @@ from database.connection import get_db_pool
 from typing import Optional, List, Dict, Any
 import asyncpg
 import re
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from utils.logger import get_logger
+from config.forms import FormStatus
 from config.points import REP_POINTS, SCROLL_POINTS
 
 logger = get_logger(__name__)
 
 # ── Allowed tables and fields for safe UPDATE ──────────────────────────────
 ALLOWED_TABLES = {
-    'recruitment', 'progress_report', 'purchase_invoice', 'mall_shop',
+    'recruitment', 'progress_report', 'purchase_invoice', 'mall_shop', 'supplier',
     'demolition_report', 'demolition_request', 'eviction_report',
     'scroll_completion'
 }
@@ -20,7 +21,7 @@ ALLOWED_FIELDS = {
         'screenshot_urls',
     },
     'progress_report': {
-        'project_name', 'time_spent', 'helper_mentions', 'screenshot_urls',
+        'project_name', 'time_spent', 'note', 'helper_mentions', 'screenshot_urls',
     },
     'purchase_invoice': {
         'purchasee_nickname', 'purchasee_ingame', 'purchase_type',
@@ -31,6 +32,9 @@ ALLOWED_FIELDS = {
         'ingame_name', 'discord_nickname', 'amount_of_shops', 'total_amount',
         'payment_frequency', 'paid_periods', 'banner_color', 'shop_number',
         'notes', 'screenshot_urls',
+    },
+    'supplier': {
+        'supplied_item', 'quantity', 'difficulty_to_obtain', 'time_spent', 'screenshot_urls',
     },
     'demolition_report': {
         'ingame_username', 'removed', 'stashed_items', 'screenshot_urls',
@@ -49,7 +53,7 @@ ALLOWED_FIELDS = {
 # Allowed columns for set_guild_config - prevents SQL injection via unknown keys
 ALLOWED_CONFIG_COLS = {
     'approval_channel_id', 'recruitment_channel_id', 'progress_channel_id',
-    'invoice_channel_id', 'mall_shop_channel_id', 'mall_shop_alert_channel_id',
+    'invoice_channel_id', 'mall_shop_channel_id', 'mall_shop_alert_channel_id', 'supplier_channel_id',
     'demolition_channel_id', 'eviction_channel_id',
     'scroll_channel_id', 'community_guild_id', 'player_role_id',
 }
@@ -231,6 +235,23 @@ class DBService:
         return row['id']
 
     @staticmethod
+    async def insert_supplier(data: Dict) -> int:
+        display_name = data.get('submitter_display', '')
+        await DBService.ensure_staff_member(data['submitted_by'], display_name)
+        row = await DBService.fetchrow(
+            """
+            INSERT INTO supplier (
+                submitted_by, submitter_display, supplied_item, quantity, difficulty_to_obtain,
+                time_spent, screenshot_urls
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
+            """,
+            data['submitted_by'], display_name, data['supplied_item'], data['quantity'],
+            data['difficulty_to_obtain'], data['time_spent'], data['screenshot_urls']
+        )
+        return row['id']
+
+    @staticmethod
     async def insert_demolition(data: Dict) -> int:
         display_name = data.get('submitter_display', '')
         await DBService.ensure_staff_member(data['submitted_by'], display_name)
@@ -341,14 +362,14 @@ class DBService:
     async def activate_mall_shop(form_id: int) -> bool:
         """Compute paid-until / next-due dates when a mall shop form is approved."""
         row = await DBService.fetchrow(
-            "SELECT payment_frequency, paid_periods FROM mall_shop WHERE id = $1 AND status = 'approved'",
+            f"SELECT payment_frequency, paid_periods FROM mall_shop WHERE id = $1 AND status = '{FormStatus.APPROVED}'",
             form_id
         )
         if not row:
             return False
 
         next_due_date = DBService._mall_shop_next_due_date(
-            row['payment_frequency'], row['paid_periods'], datetime.utcnow().date()
+            row['payment_frequency'], row['paid_periods'], datetime.now(timezone.utc).date()
         )
         if not next_due_date:
             return False
@@ -361,7 +382,7 @@ class DBService:
 
     @staticmethod
     async def get_mall_shop_alerts(today=None) -> Dict[str, List[Dict]]:
-        today = today or datetime.utcnow().date()
+        today = today or datetime.now(timezone.utc).date()
 
         due_rows = await DBService.fetch(
             """
@@ -369,9 +390,10 @@ class DBService:
                    payment_frequency, paid_periods, banner_color, shop_number, notes, paid_until, next_due_date,
                    last_due_alert_for, last_overdue_alert_for, status
             FROM mall_shop
-            WHERE status = 'approved'
+            WHERE status = '{FormStatus.APPROVED}'
               AND next_due_date IS NOT NULL
-              AND next_due_date = $1::date
+              AND next_due_date <= $1::date
+              AND next_due_date > ($1::date - 3)
               AND COALESCE(last_due_alert_for, DATE '1970-01-01') <> next_due_date
             ORDER BY next_due_date, submitted_at
             """,
@@ -384,7 +406,7 @@ class DBService:
                    payment_frequency, paid_periods, banner_color, shop_number, notes, paid_until, next_due_date,
                    last_due_alert_for, last_overdue_alert_for, status
             FROM mall_shop
-            WHERE status = 'approved'
+            WHERE status = '{FormStatus.APPROVED}'
               AND next_due_date IS NOT NULL
               AND next_due_date <= ($1::date - 3)
               AND COALESCE(last_overdue_alert_for, DATE '1970-01-01') <> next_due_date
@@ -418,8 +440,8 @@ class DBService:
             raise ValueError(f"Invalid table: {table}")
 
         row = await DBService.fetchrow(
-            f"UPDATE {table} SET status = 'approved', approved_by = $1, approved_at = NOW() "
-            f"WHERE id = $2 AND status = 'pending' RETURNING id",
+            f"UPDATE {table} SET status = '{FormStatus.APPROVED}', approved_by = $1, approved_at = NOW() "
+            f"WHERE id = $2 AND status = '{FormStatus.PENDING}' RETURNING id",
             approver_id, form_id
         )
         return row is not None
@@ -435,14 +457,14 @@ class DBService:
 
         if denier_id is not None:
             row = await DBService.fetchrow(
-                f"UPDATE {table} SET status = 'denied', denied_by = $1, denied_at = NOW() "
-                f"WHERE id = $2 AND status IN ('pending', 'hold') RETURNING id",
+                f"UPDATE {table} SET status = '{FormStatus.DENIED}', denied_by = $1, denied_at = NOW() "
+                f"WHERE id = $2 AND status IN ('{FormStatus.PENDING}', '{FormStatus.HOLD}') RETURNING id",
                 denier_id, form_id
             )
         else:
             row = await DBService.fetchrow(
-                f"UPDATE {table} SET status = 'denied', denied_at = NOW() "
-                f"WHERE id = $1 AND status IN ('pending', 'hold') RETURNING id",
+                f"UPDATE {table} SET status = '{FormStatus.DENIED}', denied_at = NOW() "
+                f"WHERE id = $1 AND status IN ('{FormStatus.PENDING}', '{FormStatus.HOLD}') RETURNING id",
                 form_id
             )
         return row is not None
@@ -457,7 +479,7 @@ class DBService:
             raise ValueError(f"Invalid table: {table}")
 
         row = await DBService.fetchrow(
-            f"UPDATE {table} SET status = 'hold' WHERE id = $1 AND status = 'pending' RETURNING id",
+            f"UPDATE {table} SET status = '{FormStatus.HOLD}' WHERE id = $1 AND status = '{FormStatus.PENDING}' RETURNING id",
             form_id
         )
         return row is not None
@@ -467,7 +489,7 @@ class DBService:
         if table not in ALLOWED_TABLES:
             raise ValueError(f"Invalid table: {table}")
         row = await DBService.fetchrow(
-            f"SELECT * FROM {table} WHERE id = $1 AND status = 'pending'", form_id
+            f"SELECT * FROM {table} WHERE id = $1 AND status = '{FormStatus.PENDING}'", form_id
         )
         return dict(row) if row else None
 
@@ -477,6 +499,21 @@ class DBService:
             raise ValueError(f"Invalid table: {table}")
         await DBService.execute(
             f"UPDATE {table} SET thread_message_id = $1 WHERE id = $2", message_id, form_id
+        )
+
+    @staticmethod
+    async def set_form_message_ids(table: str, form_id: int, approval_message_id: int, confirmation_msg_id: int, confirmation_channel_id: int):
+        if table not in ALLOWED_TABLES:
+            raise ValueError(f"Invalid table: {table}")
+        await DBService.execute(
+            f"""
+            UPDATE {table}
+            SET approval_message_id = $1,
+                confirmation_msg_id = $2,
+                confirmation_channel_id = $3
+            WHERE id = $4
+            """,
+            approval_message_id, confirmation_msg_id, confirmation_channel_id, form_id
         )
 
     @staticmethod
@@ -518,7 +555,7 @@ class DBService:
     @staticmethod
     async def get_all_pending_forms() -> List[Dict]:
         tables = [
-            'recruitment', 'progress_report', 'purchase_invoice', 'mall_shop',
+            'recruitment', 'progress_report', 'purchase_invoice', 'mall_shop', 'supplier',
             'demolition_report', 'demolition_request', 'eviction_report',
             'scroll_completion'
         ]
@@ -529,7 +566,7 @@ class DBService:
                     f"SELECT id, submitted_by, approval_message_id, "
                     f"confirmation_msg_id, confirmation_channel_id, "
                     f"resend_confirmation_msg_id, resend_confirmation_channel_id "
-                    f"FROM {table} WHERE status = 'pending'"
+                    f"FROM {table} WHERE status IN ('{FormStatus.PENDING}', '{FormStatus.HOLD}')"
                 )
                 for row in rows:
                     results.append({
@@ -600,13 +637,13 @@ class DBService:
     async def get_user_stats(discord_id: int) -> Dict:
         stats = {}
         tables = [
-            'recruitment', 'progress_report', 'purchase_invoice', 'mall_shop',
+            'recruitment', 'progress_report', 'purchase_invoice', 'mall_shop', 'supplier',
             'demolition_report', 'demolition_request', 'eviction_report',
             'scroll_completion'
         ]
         for table in tables:
             count = await DBService.fetchrow(
-                f"SELECT COUNT(*) FROM {table} WHERE submitted_by = $1 AND status = 'approved'",
+                f"SELECT COUNT(*) FROM {table} WHERE submitted_by = $1 AND status = '{FormStatus.APPROVED}'",
                 discord_id
             )
             stats[table] = count[0] if count else 0
@@ -683,7 +720,7 @@ class DBService:
         query = f"""
             SELECT submitted_by AS discord_id, COUNT(*) AS count
             FROM {table}
-            WHERE status = 'approved' AND {time_filter}
+            WHERE status = '{FormStatus.APPROVED}' AND {time_filter}
             GROUP BY submitted_by
             ORDER BY count DESC
             LIMIT $1
@@ -705,13 +742,13 @@ class DBService:
 
         stats = {}
         tables = [
-            'recruitment', 'progress_report', 'purchase_invoice', 'mall_shop',
+            'recruitment', 'progress_report', 'purchase_invoice', 'mall_shop', 'supplier',
             'demolition_report', 'demolition_request', 'eviction_report',
             'scroll_completion'
         ]
         for table in tables:
             count = await DBService.fetchrow(
-                f"SELECT COUNT(*) FROM {table} WHERE submitted_by = $1 AND status = 'approved' AND {time_filter}",
+                f"SELECT COUNT(*) FROM {table} WHERE submitted_by = $1 AND status = '{FormStatus.APPROVED}' AND {time_filter}",
                 discord_id
             )
             stats[table] = count[0] if count else 0
@@ -772,7 +809,7 @@ class DBService:
         ]
         for table, points, form_type in form_config:
             rows = await DBService.fetch(
-                f"SELECT id, submitted_by, approved_by, submitted_at, approved_at FROM {table} WHERE status = 'approved'"
+                f"SELECT id, submitted_by, approved_by, submitted_at, approved_at FROM {table} WHERE status = '{FormStatus.APPROVED}'"
             )
             logger.info(f"Processing {len(rows)} approved rows from {table} ({points} pts each)")
             for row in rows:
@@ -792,7 +829,7 @@ class DBService:
         # Process scroll_completion with variable points and timestamps
         scroll_rows = await DBService.fetch(
             "SELECT id, submitted_by, approved_by, scroll_type, submitted_at, approved_at "
-            "FROM scroll_completion WHERE status = 'approved'"
+            f"FROM scroll_completion WHERE status = '{FormStatus.APPROVED}'"
         )
         logger.info(f"Processing {len(scroll_rows)} approved scroll completions")
         for row in scroll_rows:
@@ -814,7 +851,7 @@ class DBService:
         # Process progress_help from helper mentions (multi‑helper fix #12)
         help_rows = await DBService.fetch(
             "SELECT id, helper_mentions, submitted_at FROM progress_report "
-            "WHERE status = 'approved' AND helper_mentions IS NOT NULL"
+            f"WHERE status = '{FormStatus.APPROVED}' AND helper_mentions IS NOT NULL"
         )
         logger.info(f"Processing {len(help_rows)} helper mentions ({REP_POINTS['progress_help']} pts each)")
         for row in help_rows:

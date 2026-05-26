@@ -2,19 +2,17 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from services.db_service import DBService
-from services.s3_service import upload_image
+from utils.helpers import upload_attachments, validate_text_field, validate_numeric_field
 from utils.views import ApprovalView
+from utils.form_embeds import build_submission_embed
 from utils.logger import get_logger
+from config.forms import display_id as make_display_id
 
 logger = get_logger(__name__)
 
 
 class MallShopCog(commands.Cog):
     """Commands for submitting and tracking mall shop rent records."""
-
-    _TABLE_PREFIX = {
-        'mall_shop': 'msh'
-    }
 
     _PAYMENT_CHOICES = [
         app_commands.Choice(name='Daily', value='daily'),
@@ -37,24 +35,38 @@ class MallShopCog(commands.Cog):
     @mall_shop_alerts.before_loop
     async def before_mall_shop_alerts(self):
         await self.bot.wait_until_ready()
+        await self._send_mall_shop_alerts()
 
     @staticmethod
-    def _alert_message(row: dict, overdue: bool = False) -> str:
-        base = (
-            f"{row['ingame_name']} has to pay for their {row['amount_of_shops']} shops today, "
-            f"the total is {row['total_amount']}"
-        )
-        if overdue:
-            days_overdue = 0
+    def _build_alert_embed(row: dict, overdue: bool = False) -> discord.Embed:
+        name = row.get('ingame_name', 'Unknown owner')
+        shops = row.get('amount_of_shops', 0)
+        total = row.get('total_amount', 0)
+        due_date = row.get('next_due_date')
+        days_overdue = 0
+        if overdue and due_date:
             try:
-                next_due = row.get('next_due_date')
-                if next_due:
-                    days_overdue = max((discord.utils.utcnow().date() - next_due).days, 0)
+                days_overdue = max((discord.utils.utcnow().date() - due_date).days, 0)
             except Exception:
                 days_overdue = 0
-            if days_overdue >= 3:
-                base += f" (overdue by {days_overdue} days)"
-        return base
+
+        title = "⚠️ Rent Overdue" if overdue else "🔔 Rent Due"
+        color = discord.Color.red() if overdue else discord.Color.gold()
+        embed = discord.Embed(title=title, color=color, timestamp=discord.utils.utcnow())
+        embed.add_field(name="Owner", value=name, inline=True)
+        embed.add_field(name="Shops", value=str(shops), inline=True)
+        embed.add_field(name="Total", value=f"{total} coins", inline=True)
+        if due_date:
+            embed.add_field(name="Due Date", value=str(due_date), inline=True)
+        if overdue:
+            embed.add_field(
+                name="Overdue",
+                value=f"{days_overdue} day{'s' if days_overdue != 1 else ''}",
+                inline=True,
+            )
+        else:
+            embed.add_field(name="Status", value="Payment due now", inline=True)
+        return embed
 
     async def _send_mall_shop_alerts(self):
         try:
@@ -62,30 +74,31 @@ class MallShopCog(commands.Cog):
             if not alerts['due'] and not alerts['overdue']:
                 return
 
-            config = None
-            if self.bot.guilds:
-                config = await DBService.get_guild_config(self.bot.guilds[0].id)
-            if not config:
-                return
+            guild_configs = await DBService.get_all_guild_configs()
+            for config in guild_configs:
+                channel_id = config.get('mall_shop_alert_channel_id')
+                if not channel_id:
+                    continue
 
-            channel_id = config.get('mall_shop_alert_channel_id')
-            if not channel_id:
-                return
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    continue
 
-            channel = self.bot.get_channel(channel_id)
-            if not channel:
-                return
+                for row in alerts['due']:
+                    try:
+                        await channel.send(embed=self._build_alert_embed(row, overdue=False))
+                        await DBService.mark_mall_shop_alert_sent(row['id'], 'due')
+                    except Exception:
+                        logger.exception("Failed to send due mall shop alert for %s", row.get('id'))
 
-            for row in alerts['due']:
-                await channel.send(self._alert_message(row, overdue=False))
-                await DBService.mark_mall_shop_alert_sent(row['id'], 'due')
-
-            for row in alerts['overdue']:
-                await channel.send(self._alert_message(row, overdue=True))
-                await DBService.mark_mall_shop_alert_sent(row['id'], 'overdue')
-        except Exception as e:
-            logger.exception(f'Failed to send mall shop alerts: {e}')
-
+                for row in alerts['overdue']:
+                    try:
+                        await channel.send(embed=self._build_alert_embed(row, overdue=True))
+                        await DBService.mark_mall_shop_alert_sent(row['id'], 'overdue')
+                    except Exception:
+                        logger.exception("Failed to send overdue mall shop alert for %s", row.get('id'))
+        except Exception:
+            logger.exception("Failed to send mall shop alerts")
     @app_commands.command(
         name='mall_shop',
         description='Record a mall shop payment, lease coverage, or rent extension'
@@ -129,33 +142,27 @@ class MallShopCog(commands.Cog):
             return
 
         try:
-            screenshots = [s for s in (screenshot1, screenshot2, screenshot3, screenshot4, screenshot5) if s]
-            if not screenshots:
-                await interaction.followup.send(
-                    '❌ **At least one screenshot is required.** Please attach an image.',
-                    ephemeral=True,
-                )
+            for err in filter(None, [
+                validate_text_field(ingame_name, 'In-game Name', 64),
+                validate_text_field(banner_color, 'Banner Color', 32) if banner_color else None,
+                validate_text_field(shop_number, 'Shop Number', 32) if shop_number else None,
+                validate_text_field(notes, 'Notes', 1000) if notes else None,
+                validate_numeric_field(amount_of_shops, 'Amount of Shops', minimum=1, maximum=1000),
+                validate_numeric_field(total_amount, 'Total Amount', minimum=0),
+                validate_numeric_field(paid_periods, 'Paid Periods', minimum=1, maximum=120),
+            ]):
+                await interaction.followup.send(f'❌ {err}', ephemeral=True)
                 return
-
-            if amount_of_shops <= 0:
-                await interaction.followup.send(
-                    '❌ **Amount of shops must be at least 1.**',
-                    ephemeral=True,
-                )
+            screenshot_urls = await upload_attachments(
+                interaction,
+                screenshot1,
+                screenshot2,
+                screenshot3,
+                screenshot4,
+                screenshot5,
+            )
+            if screenshot_urls is None:
                 return
-
-            if paid_periods <= 0:
-                await interaction.followup.send(
-                    '❌ **Paid periods must be at least 1.**',
-                    ephemeral=True,
-                )
-                return
-
-            screenshot_urls = []
-            for img in screenshots:
-                img_bytes = await img.read()
-                url = await upload_image(img_bytes, img.filename)
-                screenshot_urls.append(url)
 
             data = {
                 'submitted_by': interaction.user.id,
@@ -188,10 +195,8 @@ class MallShopCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls'],
             }
 
-            display_id = f"{self._TABLE_PREFIX['mall_shop']}_{form_id}"
-            confirm_msg = await interaction.followup.send(
-                f"✅ Mall shop record `{display_id}` submitted and queued for review."
-            )
+            display_id = make_display_id('mall_shop', form_id)
+            confirm_msg = await interaction.followup.send(f"✅ Submitted · {display_id}\nYour mall shop record is pending review.")
 
             config = await DBService.get_guild_config(interaction.guild_id)
             channel_id = None
@@ -200,31 +205,7 @@ class MallShopCog(commands.Cog):
             if channel_id:
                 approval_channel = self.bot.get_channel(channel_id)
                 if approval_channel:
-                    embed = discord.Embed(
-                        title='Mall Shop Record',
-                        color=discord.Color.teal(),
-                        timestamp=discord.utils.utcnow(),
-                    )
-                    embed.add_field(name='Owner', value=ingame_name, inline=True)
-                    embed.add_field(name='Shops', value=str(amount_of_shops), inline=True)
-                    embed.add_field(name='Total', value=f'{total_amount} coins', inline=True)
-                    embed.add_field(
-                        name='Cycle',
-                        value=DBService._mall_shop_frequency_label(payment_frequency.value, paid_periods),
-                        inline=True,
-                    )
-                    embed.add_field(name='Periods Paid', value=str(paid_periods), inline=True)
-                    if banner_color:
-                        embed.add_field(name='Banner Color', value=banner_color, inline=True)
-                    if shop_number:
-                        embed.add_field(name='Shop Number', value=str(shop_number), inline=True)
-                    if notes:
-                        embed.add_field(name='Notes', value=notes[:1000], inline=False)
-                    if screenshot_urls:
-                        embed.set_image(url=screenshot_urls[0])
-                        if len(screenshot_urls) > 1:
-                            embed.add_field(name='Additional Screenshots', value=f'{len(screenshot_urls) - 1} more', inline=False)
-                    embed.set_footer(text=f'Form ID: {display_id}')
+                    embed = build_submission_embed('mall_shop', form_data, form_id=form_id, submitter_name=interaction.user.display_name)
 
                     view = ApprovalView(
                         table='mall_shop',
@@ -239,17 +220,12 @@ class MallShopCog(commands.Cog):
                         form_data=form_data,
                     )
                     msg = await approval_channel.send(embed=embed, view=view)
-                    await DBService.set_approval_message_id('mall_shop', form_id, msg.id)
-
-                    await DBService.execute(
-                        'UPDATE mall_shop SET confirmation_msg_id = $1, confirmation_channel_id = $2 WHERE id = $3',
-                        confirm_msg.id, interaction.channel_id, form_id,
-                    )
+                    await DBService.set_form_message_ids('mall_shop', form_id, msg.id, confirm_msg.id, interaction.channel_id)
 
         except Exception as e:
-            logger.exception(f'Error in mall_shop_submit: {e}')
+            logger.exception("Error in mall_shop_submit")
             await interaction.followup.send(
-                '❌ An error occurred while submitting the mall shop record. Please try again later.',
+                '❌ Submission failed. Please try again or contact an admin if it keeps happening.',
                 ephemeral=True,
             )
 

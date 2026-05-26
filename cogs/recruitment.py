@@ -2,18 +2,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from services.db_service import DBService
-from services.s3_service import upload_image
+from utils.helpers import upload_attachments, validate_text_field, validate_numeric_field
 from utils.views import ApprovalView
+from utils.form_embeds import build_submission_embed
 from utils.logger import get_logger
+from config.forms import display_id as make_display_id
 
 logger = get_logger(__name__)
 
 class RecruitmentCog(commands.Cog):
     """Commands for submitting recruitment logs."""
-
-    _TABLE_PREFIX = {
-        'recruitment': 'rec'
-    }
 
     def __init__(self, bot):
         self.bot = bot
@@ -54,11 +52,25 @@ class RecruitmentCog(commands.Cog):
             return
 
         try:
-            screenshots = [s for s in (screenshot1, screenshot2, screenshot3, screenshot4, screenshot5) if s]
-            screenshot_urls = []
-            for img in screenshots:
-                url = await upload_image(await img.read(), img.filename)
-                screenshot_urls.append(url)
+            for err in filter(None, [
+                validate_text_field(ingame_username, 'In-game Username', 32),
+                validate_text_field(nickname, 'Nickname', 32),
+                validate_text_field(discord_username, 'Discord Username', 100) if discord_username else None,
+                validate_text_field(age, 'Age', 32) if age else None,
+                validate_numeric_field(plots, 'Plots', minimum=1, maximum=1000),
+            ]):
+                await interaction.followup.send(f'❌ {err}', ephemeral=True)
+                return
+            screenshot_urls = await upload_attachments(
+                interaction,
+                screenshot1,
+                screenshot2,
+                screenshot3,
+                screenshot4,
+                screenshot5,
+            )
+            if screenshot_urls is None:
+                return
 
             data = {
                 'submitted_by': interaction.user.id,
@@ -84,8 +96,7 @@ class RecruitmentCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
-            prefix = self._TABLE_PREFIX['recruitment']
-            display_id = f"{prefix}_{form_id}"
+            display_id = make_display_id("recruitment", form_id)
 
             confirm_msg = await interaction.followup.send(f"✅ Recruitment `{display_id}` logged - pending approval.")
 
@@ -93,23 +104,7 @@ class RecruitmentCog(commands.Cog):
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
                 if approval_channel:
-                    embed = discord.Embed(
-                        title="Recruitment Log",
-                        color=discord.Color.blue(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.add_field(name="Recruiter", value=interaction.user.display_name, inline=True)
-                    embed.add_field(name="New Player", value=f"{nickname} ({ingame_username})", inline=True)
-                    embed.add_field(name="Plots", value=str(plots), inline=True)
-                    if discord_username:
-                        embed.add_field(name="Discord", value=discord_username, inline=True)
-                    if age:
-                        embed.add_field(name="Age", value=age, inline=True)
-                    if screenshot_urls:
-                        embed.set_image(url=screenshot_urls[0])
-                        if len(screenshot_urls) > 1:
-                            embed.add_field(name="Additional Screenshots", value=f"{len(screenshot_urls)-1} more", inline=False)
-                    embed.set_footer(text=f"Form ID: {display_id}")
+                    embed = build_submission_embed('recruitment', form_data, form_id=form_id, submitter_name=interaction.user.display_name)
 
                     view = ApprovalView(
                         table='recruitment',
@@ -133,8 +128,8 @@ class RecruitmentCog(commands.Cog):
                     )
 
         except Exception as e:
-            logger.exception(f"Error in recruitment_add: {e}")
-            await interaction.followup.send("❌ An error occurred. Please try again later.", ephemeral=True)
+            logger.exception("Error in recruitment_add")
+            await interaction.followup.send("❌ Submission failed. Please try again or contact an admin if it keeps happening.", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(RecruitmentCog(bot))

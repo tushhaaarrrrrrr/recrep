@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS guild_config (
     invoice_channel_id BIGINT,
     mall_shop_channel_id BIGINT,
     mall_shop_alert_channel_id BIGINT,
+    supplier_channel_id BIGINT,
     demolition_channel_id BIGINT,
     eviction_channel_id BIGINT,
     scroll_channel_id BIGINT,
@@ -19,7 +20,7 @@ CREATE TABLE IF NOT EXISTS guild_config (
 -- Internal staff roles
 CREATE TABLE IF NOT EXISTS user_roles (
     user_id BIGINT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('admin', 'comayor', 'builder', 'recruiter')),
+    role TEXT NOT NULL CHECK (role IN ('admin', 'comayor', 'builder', 'recruiter', 'supplier')),
     granted_by BIGINT,
     granted_at TIMESTAMP DEFAULT NOW(),
     PRIMARY KEY (user_id, role)
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS staff_member (
 CREATE TABLE IF NOT EXISTS recruitment (
     id SERIAL PRIMARY KEY,
     submitted_by BIGINT REFERENCES staff_member(discord_id),
+    submitter_display TEXT,
     submitted_at TIMESTAMP DEFAULT NOW(),
     ingame_username TEXT NOT NULL,
     discord_username TEXT,
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS progress_report (
     helper_mentions TEXT,
     project_name TEXT NOT NULL,
     time_spent TEXT NOT NULL,
+    note TEXT,
     screenshot_urls TEXT NOT NULL,
     status TEXT DEFAULT 'pending',
     approved_by BIGINT,
@@ -110,6 +113,12 @@ CREATE TABLE IF NOT EXISTS purchase_invoice (
     approval_message_id BIGINT
 );
 
+CREATE INDEX IF NOT EXISTS idx_recruitment_status ON recruitment(status);
+
+CREATE INDEX IF NOT EXISTS idx_progress_report_status ON progress_report(status);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_invoice_status ON purchase_invoice(status);
+
 -- Mall shop rental form
 CREATE TABLE IF NOT EXISTS mall_shop (
     id SERIAL PRIMARY KEY,
@@ -143,8 +152,37 @@ CREATE TABLE IF NOT EXISTS mall_shop (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mall_shop_status_due ON mall_shop(status, next_due_date);
+CREATE INDEX IF NOT EXISTS idx_mall_shop_status ON mall_shop(status);
 CREATE INDEX IF NOT EXISTS idx_mall_shop_ingame_name ON mall_shop(ingame_name);
 CREATE INDEX IF NOT EXISTS idx_mall_shop_submitted_by ON mall_shop(submitted_by);
+
+
+-- Supplier report form
+CREATE TABLE IF NOT EXISTS supplier (
+    id SERIAL PRIMARY KEY,
+    submitted_by BIGINT REFERENCES staff_member(discord_id),
+    submitted_at TIMESTAMP DEFAULT NOW(),
+    supplied_item TEXT NOT NULL,
+    quantity INTEGER NOT NULL,
+    difficulty_to_obtain TEXT NOT NULL,
+    time_spent TEXT NOT NULL,
+    screenshot_urls TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    approved_by BIGINT,
+    approved_at TIMESTAMP,
+    denied_by BIGINT,
+    denied_at TIMESTAMP,
+    confirmation_msg_id BIGINT,
+    confirmation_channel_id BIGINT,
+    resend_confirmation_msg_id BIGINT,
+    resend_confirmation_channel_id BIGINT,
+    thread_message_id BIGINT,
+    approval_message_id BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_supplier_status_item ON supplier(status, supplied_item);
+CREATE INDEX IF NOT EXISTS idx_supplier_status ON supplier(status);
+CREATE INDEX IF NOT EXISTS idx_supplier_submitted_by ON supplier(submitted_by);
 
 -- Demolition report
 CREATE TABLE IF NOT EXISTS demolition_report (
@@ -232,6 +270,14 @@ CREATE TABLE IF NOT EXISTS scroll_completion (
     approval_message_id BIGINT
 );
 
+CREATE INDEX IF NOT EXISTS idx_demolition_report_status ON demolition_report(status);
+
+CREATE INDEX IF NOT EXISTS idx_demolition_request_status ON demolition_request(status);
+
+CREATE INDEX IF NOT EXISTS idx_eviction_report_status ON eviction_report(status);
+
+CREATE INDEX IF NOT EXISTS idx_scroll_completion_status ON scroll_completion(status);
+
 -- Reputation log
 CREATE TABLE IF NOT EXISTS reputation_log (
     id SERIAL PRIMARY KEY,
@@ -242,6 +288,8 @@ CREATE TABLE IF NOT EXISTS reputation_log (
     form_id INT,
     created_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_reputation_log_staff_created ON reputation_log(staff_id, created_at DESC);
 
 -- Leaderboard views
 CREATE OR REPLACE VIEW weekly_reputation AS
@@ -261,3 +309,4 @@ SELECT staff_id, SUM(points) AS points
 FROM reputation_log
 WHERE created_at >= date_trunc('month', CURRENT_DATE)
 GROUP BY staff_id;
+ALTER TABLE supplier ADD COLUMN IF NOT EXISTS submitter_display TEXT;

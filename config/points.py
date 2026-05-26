@@ -4,6 +4,7 @@ REP_POINTS = {
     'progress_help': 7,
     'purchase_invoice': 5,
     'mall_shop': 5,
+    'supplier': 5,
     'demolition_report': 4,
     'demolition_request': 1,
     'eviction_report': 1,

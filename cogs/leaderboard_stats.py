@@ -144,7 +144,7 @@ class LeaderboardStatsCog(commands.Cog):
             await interaction.followup.send(embed=embed, view=view)
 
         except Exception as e:
-            logger.exception(f"Leaderboard error: {e}")
+            logger.exception('Leaderboard error: ')
             await interaction.followup.send(
                 "❌ **Failed to load leaderboard.** Please try again later.",
                 ephemeral=True
@@ -229,7 +229,7 @@ class LeaderboardStatsCog(commands.Cog):
             await interaction.followup.send(embed=embed)
 
         except Exception as e:
-            logger.exception(f"Stats command error: {e}")
+            logger.exception('Stats command error: ')
             await interaction.followup.send(
                 "❌ **Failed to load statistics.** Please try again later.",
                 ephemeral=True

@@ -1,8 +1,15 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+
 from services.db_service import DBService
-from utils.views import ApprovalView, _FORM_CHANNEL_MAP
+from config.forms import (
+    FORM_TABLE_PREFIX,
+    FORM_CHANNEL_KEY,
+    FORM_THREAD_LABEL,
+    FormStatus,
+)
+from utils.views import ApprovalView
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -15,34 +22,17 @@ class ApprovalCog(commands.Cog):
         'progress_report',
         'purchase_invoice',
         'mall_shop',
+        'supplier',
         'demolition_report',
         'demolition_request',
         'eviction_report',
         'scroll_completion'
     ]
 
-    _TABLE_PREFIX = {
-        'recruitment': 'rec',
-        'progress_report': 'rep',
-        'purchase_invoice': 'inv',
-        'mall_shop': 'msh',
-        'demolition_report': 'dem',
-        'demolition_request': 'dmr',
-        'eviction_report': 'evc',
-        'scroll_completion': 'scr'
-    }
+    _TABLE_PREFIX = FORM_TABLE_PREFIX
 
     # Thread prefix used by each cog
-    _THREAD_PREFIX = {
-        'recruitment': 'Recruitments',
-        'progress_report': 'Progress Reports',
-        'purchase_invoice': 'Invoices',
-        'mall_shop': 'Mall Shops',
-        'demolition_report': 'Demolitions',
-        'demolition_request': 'Demolition Requests',
-        'eviction_report': 'Evictions',
-        'scroll_completion': 'Scrolls'
-    }
+    _THREAD_PREFIX = FORM_THREAD_LABEL
 
     def __init__(self, bot):
         self.bot = bot
@@ -69,9 +59,9 @@ class ApprovalCog(commands.Cog):
         pending = []
         for table in self._FORM_TABLES:
             rows = await DBService.fetch(
-                f"SELECT id, submitted_by, submitted_at FROM {table} WHERE status = 'pending'"
+                f"SELECT id, submitted_by, submitted_at FROM {table} WHERE status = '{FormStatus.PENDING}'"
             )
-            prefix = self._TABLE_PREFIX.get(table, 'unk')
+            prefix = FORM_TABLE_PREFIX.get(table, 'unk')
             for row in rows:
                 pending.append((table, row['id'], prefix, row['submitted_by'], row['submitted_at']))
 
@@ -125,9 +115,9 @@ class ApprovalCog(commands.Cog):
         held = []
         for table in self._FORM_TABLES:
             rows = await DBService.fetch(
-                f"SELECT id, submitted_by, submitted_at FROM {table} WHERE status = 'hold'"
+                f"SELECT id, submitted_by, submitted_at FROM {table} WHERE status = '{FormStatus.HOLD}'"
             )
-            prefix = self._TABLE_PREFIX.get(table, 'unk')
+            prefix = FORM_TABLE_PREFIX.get(table, 'unk')
             for row in rows:
                 held.append((table, row['id'], prefix, row['submitted_by'], row['submitted_at']))
 
@@ -189,21 +179,21 @@ class ApprovalCog(commands.Cog):
             return
 
         table = None
-        for t, p in self._TABLE_PREFIX.items():
+        for t, p in FORM_TABLE_PREFIX.items():
             if p == prefix:
                 table = t
                 break
         if not table:
             await interaction.followup.send(
-                f"❌ Unknown prefix `{prefix}`. Valid prefixes: {', '.join(self._TABLE_PREFIX.values())}",
+                f"❌ Unknown prefix `{prefix}`. Valid prefixes: {', '.join(FORM_TABLE_PREFIX.values())}",
                 ephemeral=True
             )
             return
 
-        # Fetch the form - now allows 'pending' OR 'hold', plus the message IDs we need
+        # Fetch the form - now allows pending or hold, plus the message IDs we need
         row = await DBService.fetchrow(
             f"SELECT *, confirmation_msg_id, confirmation_channel_id "
-            f"FROM {table} WHERE id = $1 AND status IN ('pending', 'hold')",
+            f"FROM {table} WHERE id = $1 AND status IN ('{FormStatus.PENDING}', '{FormStatus.HOLD}')",
             numeric_id
         )
         if not row:
@@ -242,11 +232,11 @@ class ApprovalCog(commands.Cog):
                 logger.warning(f"Could not delete old approval message {old_msg_id}: {e}")
 
         # Build the embed - reflect current status in the title
-        status_label = "On Hold" if row['status'] == 'hold' else "Resubmitted"
+        status_label = "On Hold" if row['status'] == FormStatus.HOLD else "Resubmitted"
         embed = discord.Embed(
             title=f"📄 {status_label}: {table.replace('_', ' ').title()}",
             description=f"**Form ID:** `{form_id}`",
-            color=discord.Color.greyple() if row['status'] == 'hold' else discord.Color.blue(),
+            color=discord.Color.greyple() if row['status'] == FormStatus.HOLD else discord.Color.blue(),
             timestamp=discord.utils.utcnow()
         )
         embed.add_field(name="👤 Submitted by", value=f"<@{row['submitted_by']}>", inline=True)
@@ -255,7 +245,7 @@ class ApprovalCog(commands.Cog):
             embed.set_image(url=row['screenshot_urls'].split(',')[0])
 
         # Use the correct channel config key
-        channel_config_key = _FORM_CHANNEL_MAP.get(table, f"{table}_channel_id")
+        channel_config_key = FORM_CHANNEL_KEY.get(table, f"{table}_channel_id")
         thread_prefix = self._THREAD_PREFIX.get(table, table.replace('_', ' ').title())
 
         # Build the view with all the IDs we have

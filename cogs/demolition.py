@@ -2,19 +2,17 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from services.db_service import DBService
-from services.s3_service import upload_image
+from utils.helpers import upload_attachments, validate_text_field
 from utils.views import ApprovalView
+from utils.form_embeds import build_submission_embed
 from utils.logger import get_logger
+from config.forms import FORM_TABLE_PREFIX, FormStatus, display_id as make_display_id
 
 logger = get_logger(__name__)
 
 class DemolitionCog(commands.Cog):
     """Commands for submitting demolition reports and admin demolition requests."""
 
-    _TABLE_PREFIX = {
-        'demolition_report': 'dem',
-        'demolition_request': 'dmr'
-    }
 
     def __init__(self, bot):
         self.bot = bot
@@ -51,19 +49,29 @@ class DemolitionCog(commands.Cog):
             return
 
         try:
-            screenshots = [s for s in (screenshot1, screenshot2, screenshot3, screenshot4, screenshot5) if s]
-            if not screenshots:
-                await interaction.followup.send(
-                    "❌ At least one screenshot is required. Please attach an image.",
-                    ephemeral=True
-                )
+            for err in filter(None, [
+                validate_text_field(ingame_username, 'In-game Username', 32),
+                validate_text_field(removed, 'Removed', 32),
+                validate_text_field(stashed_items, 'Town Storage Status', 16),
+            ]):
+                await interaction.followup.send(f'❌ {err}', ephemeral=True)
                 return
-
-            screenshot_urls = []
-            for img in screenshots:
-                img_bytes = await img.read()
-                url = await upload_image(img_bytes, img.filename)
-                screenshot_urls.append(url)
+            if removed.strip().lower() not in {'yes', 'no', 'tbd'}:
+                await interaction.followup.send('❌ **Removed** must be `yes`, `no`, or `tbd`.', ephemeral=True)
+                return
+            if stashed_items.strip().lower() not in {'yes', 'no'}:
+                await interaction.followup.send('❌ **Items Stashed** must be `yes` or `no`.', ephemeral=True)
+                return
+            screenshot_urls = await upload_attachments(
+                interaction,
+                screenshot1,
+                screenshot2,
+                screenshot3,
+                screenshot4,
+                screenshot5,
+            )
+            if screenshot_urls is None:
+                return
 
             data = {
                 'submitted_by': interaction.user.id,
@@ -84,8 +92,7 @@ class DemolitionCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
-            prefix = self._TABLE_PREFIX['demolition_report']
-            display_id = f"{prefix}_{form_id}"
+            display_id = make_display_id("demolition_report", form_id)
 
             confirm_msg = await interaction.followup.send(f"✅ Demolition report `{display_id}` submitted - pending approval.")
 
@@ -93,22 +100,7 @@ class DemolitionCog(commands.Cog):
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
                 if approval_channel:
-                    embed = discord.Embed(
-                        title="Demolition Report",
-                        color=discord.Color.red(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.add_field(name="Submitter", value=interaction.user.display_name, inline=True)
-                    embed.add_field(name="Player", value=ingame_username, inline=True)
-                    embed.add_field(name="Removed", value=removed, inline=True)
-                    embed.add_field(name="Items Stashed", value=stashed_items, inline=True)
-
-                    if screenshot_urls:
-                        embed.set_image(url=screenshot_urls[0])
-                        if len(screenshot_urls) > 1:
-                            embed.add_field(name="Additional Screenshots", value=f"{len(screenshot_urls)-1} more", inline=False)
-
-                    embed.set_footer(text=f"Form ID: {display_id}")
+                    embed = build_submission_embed('demolition_report', form_data, form_id=form_id, submitter_name=interaction.user.display_name)
 
                     view = ApprovalView(
                         table='demolition_report',
@@ -132,7 +124,7 @@ class DemolitionCog(commands.Cog):
                     )
 
         except Exception as e:
-            logger.exception(f"Error in demolition_submit: {e}")
+            logger.exception("Error in demolition_submit")
             await interaction.followup.send(
                 "❌ An error occurred while submitting the report. Please try again later.",
                 ephemeral=True
@@ -169,19 +161,29 @@ class DemolitionCog(commands.Cog):
             return
 
         try:
-            screenshots = [s for s in (screenshot1, screenshot2, screenshot3, screenshot4, screenshot5) if s]
-            if not screenshots:
-                await interaction.followup.send(
-                    "❌ At least one screenshot is required. Please attach an image.",
-                    ephemeral=True
-                )
+            for err in filter(None, [
+                validate_text_field(ingame_username, 'In-game Username', 32),
+                validate_text_field(removed, 'Removed', 32),
+                validate_text_field(stashed_items, 'Town Storage Status', 16),
+            ]):
+                await interaction.followup.send(f'❌ {err}', ephemeral=True)
                 return
-
-            screenshot_urls = []
-            for img in screenshots:
-                img_bytes = await img.read()
-                url = await upload_image(img_bytes, img.filename)
-                screenshot_urls.append(url)
+            if removed.strip().lower() not in {'yes', 'no', 'tbd'}:
+                await interaction.followup.send('❌ **Removed** must be `yes`, `no`, or `tbd`.', ephemeral=True)
+                return
+            if stashed_items.strip().lower() not in {'yes', 'no'}:
+                await interaction.followup.send('❌ **Items Stashed** must be `yes` or `no`.', ephemeral=True)
+                return
+            screenshot_urls = await upload_attachments(
+                interaction,
+                screenshot1,
+                screenshot2,
+                screenshot3,
+                screenshot4,
+                screenshot5,
+            )
+            if screenshot_urls is None:
+                return
 
             data = {
                 'submitted_by': interaction.user.id,
@@ -189,7 +191,7 @@ class DemolitionCog(commands.Cog):
                 'ingame_username': ingame_username,
                 'reason': reason,
                 'screenshot_urls': ','.join(screenshot_urls),
-                'status': 'pending'
+                'status': FormStatus.PENDING
             }
 
             form_id = await DBService.insert_demolition_request(data)
@@ -201,8 +203,7 @@ class DemolitionCog(commands.Cog):
                 'screenshot_urls': data['screenshot_urls']
             }
 
-            prefix = self._TABLE_PREFIX['demolition_request']
-            display_id = f"{prefix}_{form_id}"
+            display_id = make_display_id('demolition_request', form_id)
 
             confirm_msg = await interaction.followup.send(f"📢 Demolition request `{display_id}` submitted - pending admin review.")
 
@@ -210,22 +211,7 @@ class DemolitionCog(commands.Cog):
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
                 if approval_channel:
-                    embed = discord.Embed(
-                        title="Demolition Request (Admin)",
-                        color=discord.Color.orange(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.add_field(name="Requested by", value=interaction.user.display_name, inline=True)
-                    embed.add_field(name="Target Player", value=ingame_username, inline=True)
-                    embed.add_field(name="Reason", value=reason, inline=False)
-
-                    if screenshot_urls:
-                        embed.set_image(url=screenshot_urls[0])
-                        if len(screenshot_urls) > 1:
-                            embed.add_field(name="Additional Screenshots", value=f"{len(screenshot_urls)-1} more", inline=False)
-
-                    embed.set_footer(text=f"Request ID: {display_id}")
-
+                    embed = build_submission_embed('demolition_request', form_data, form_id=form_id, submitter_name=interaction.user.display_name)
                     view = ApprovalView(
                         table='demolition_request',
                         form_id=form_id,
@@ -248,7 +234,7 @@ class DemolitionCog(commands.Cog):
                     )
 
         except Exception as e:
-            logger.exception(f"Error in demolition_request: {e}")
+            logger.exception("Error in demolition_request")
             await interaction.followup.send(
                 "❌ An error occurred while submitting the request. Please try again later.",
                 ephemeral=True

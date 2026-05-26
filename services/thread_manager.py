@@ -40,7 +40,7 @@ class ThreadManager:
             logger.error(f"Missing permissions to create threads in channel {channel.id}")
             raise PermissionError(f"Bot lacks 'Create Public Threads' permission in {channel.mention}")
         except Exception as e:
-            logger.exception(f"Failed to create thread in channel {channel.id}: {e}")
+            logger.exception('Failed to create thread in channel {channel.id}: ')
             raise
 
     @staticmethod

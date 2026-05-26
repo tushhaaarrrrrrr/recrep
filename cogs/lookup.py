@@ -4,6 +4,7 @@ from discord import app_commands
 from discord.ext import commands
 from services.db_service import DBService
 from utils.logger import get_logger
+from config.forms import FORM_TABLE_PREFIX
 import re
 
 logger = get_logger(__name__)
@@ -64,12 +65,6 @@ class LookupView(discord.ui.View):
 
 class LookupCog(commands.Cog):
     """Commands to look up recruitments and invoices with full details."""
-
-    _TABLE_PREFIX = {
-        'recruitment': 'rec',
-        'purchase_invoice': 'inv',
-        'mall_shop': 'msh'
-    }
 
     def __init__(self, bot):
         self.bot = bot

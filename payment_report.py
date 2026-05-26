@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from config.forms import FormStatus
 
 _HERE = Path(__file__).resolve().parent
 for _parent in [_HERE, *_HERE.parents]:
@@ -278,7 +279,7 @@ async def _fetch(query: str, *args):
 
 
 async def get_staff():
-    return await _fetch("""
+    return await _fetch(f"""
         SELECT discord_id, display_name
         FROM staff_member
         ORDER BY COALESCE(display_name, discord_id::TEXT)
@@ -286,69 +287,69 @@ async def get_staff():
 
 
 async def get_recruitments(start: date, end: date):
-    return await _fetch("""
+    return await _fetch(f"""
         SELECT submitted_by, id, submitted_at,
                ingame_username, discord_username, nickname, plots
         FROM recruitment
         WHERE submitted_at >= $1 AND submitted_at < $2
-          AND status = 'approved'
+          AND status = '{FormStatus.APPROVED}'
         ORDER BY submitted_by, submitted_at
     """, start, end)
 
 
 async def get_progress_reports(start: date, end: date):
-    return await _fetch("""
+    return await _fetch(f"""
         SELECT submitted_by, id, submitted_at,
                project_name, time_spent, helper_mentions, screenshot_urls
         FROM progress_report
         WHERE submitted_at >= $1 AND submitted_at < $2
-          AND status = 'approved'
+          AND status = '{FormStatus.APPROVED}'
         ORDER BY submitted_by, submitted_at
     """, start, end)
 
 
 async def get_purchase_invoices(start: date, end: date):
-    return await _fetch("""
+    return await _fetch(f"""
         SELECT submitted_by, id, submitted_at,
                purchasee_nickname, purchasee_ingame,
                purchase_type, num_plots, total_plots,
                amount_deposited, screenshot_urls
         FROM purchase_invoice
         WHERE submitted_at >= $1 AND submitted_at < $2
-          AND status = 'approved'
+          AND status = '{FormStatus.APPROVED}'
         ORDER BY submitted_by, submitted_at
     """, start, end)
 
 
 async def get_demolition_reports(start: date, end: date):
-    return await _fetch("""
+    return await _fetch(f"""
         SELECT submitted_by, id, submitted_at,
                ingame_username, removed, stashed_items, screenshot_urls
         FROM demolition_report
         WHERE submitted_at >= $1 AND submitted_at < $2
-          AND status = 'approved'
+          AND status = '{FormStatus.APPROVED}'
         ORDER BY submitted_by, submitted_at
     """, start, end)
 
 
 async def get_eviction_reports(start: date, end: date):
-    return await _fetch("""
+    return await _fetch(f"""
         SELECT submitted_by, id, submitted_at,
                ingame_owner, inactivity_period, items_stored, screenshot_urls
         FROM eviction_report
         WHERE submitted_at >= $1 AND submitted_at < $2
-          AND status = 'approved'
+          AND status = '{FormStatus.APPROVED}'
         ORDER BY submitted_by, submitted_at
     """, start, end)
 
 
 async def get_scroll_completions(start: date, end: date):
-    return await _fetch("""
+    return await _fetch(f"""
         SELECT submitted_by, id, submitted_at,
                scroll_type, items_stored, screenshot_urls
         FROM scroll_completion
         WHERE submitted_at >= $1 AND submitted_at < $2
-          AND status = 'approved'
+          AND status = '{FormStatus.APPROVED}'
         ORDER BY submitted_by, submitted_at
     """, start, end)
 
@@ -526,6 +527,7 @@ async def load_bundle(month_str: str, output_path: Path, skip_empty: bool = Fals
             {
                 "Project": txt(row["project_name"]) or "—",
                 "Time Spent": txt(row["time_spent"]) or "—",
+                "Note": txt(row["note"]) if row["note"] is not None else "—",
                 "Hours": f"{hours:.2f}",
                 "Type": kind.title(),
                 "Auto Payment": money(auto),

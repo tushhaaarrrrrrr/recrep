@@ -2,18 +2,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from services.db_service import DBService
-from services.s3_service import upload_image
+from utils.helpers import upload_attachments, validate_text_field
 from utils.views import ApprovalView
+from utils.form_embeds import build_submission_embed
 from utils.logger import get_logger
+from config.forms import display_id as make_display_id
 
 logger = get_logger(__name__)
 
 class ProgressCog(commands.Cog):
     """Commands for submitting progress reports on building projects."""
-
-    _TABLE_PREFIX = {
-        'progress_report': 'rep'
-    }
 
     def __init__(self, bot):
         self.bot = bot
@@ -25,6 +23,7 @@ class ProgressCog(commands.Cog):
     @app_commands.describe(
         project_name="Name of the project (e.g., 'Town Hall', 'Mob Farm')",
         time_spent="Time spent on the project (e.g., '2 hours', '30 minutes')",
+        note="Optional note for extra context, blockers, or updates",
         helper="Optional: mention a user who helped (they will also receive reputation)",
         screenshot1="Screenshot evidence (at least one required)",
         screenshot2="Additional screenshot (optional)",
@@ -37,6 +36,7 @@ class ProgressCog(commands.Cog):
         interaction: discord.Interaction,
         project_name: str,
         time_spent: str,
+        note: str = None,
         helper: str = None,
         screenshot1: discord.Attachment = None,
         screenshot2: discord.Attachment = None,
@@ -50,19 +50,24 @@ class ProgressCog(commands.Cog):
             return
 
         try:
-            screenshots = [s for s in (screenshot1, screenshot2, screenshot3, screenshot4, screenshot5) if s]
-            if not screenshots:
-                await interaction.followup.send(
-                    "❌ At least one screenshot is required. Please attach an image.",
-                    ephemeral=True
-                )
+            for err in filter(None, [
+                validate_text_field(project_name, 'Project Name', 120),
+                validate_text_field(time_spent, 'Time Spent', 40),
+                validate_text_field(note, 'Note', 1000) if note else None,
+                validate_text_field(helper, 'Helper', 120) if helper else None,
+            ]):
+                await interaction.followup.send(f'❌ {err}', ephemeral=True)
                 return
-
-            screenshot_urls = []
-            for img in screenshots:
-                img_bytes = await img.read()
-                url = await upload_image(img_bytes, img.filename)
-                screenshot_urls.append(url)
+            screenshot_urls = await upload_attachments(
+                interaction,
+                screenshot1,
+                screenshot2,
+                screenshot3,
+                screenshot4,
+                screenshot5,
+            )
+            if screenshot_urls is None:
+                return
 
             data = {
                 'submitted_by': interaction.user.id,
@@ -70,6 +75,7 @@ class ProgressCog(commands.Cog):
                 'helper_mentions': helper,
                 'project_name': project_name,
                 'time_spent': time_spent,
+                'note': note,
                 'screenshot_urls': ','.join(screenshot_urls)
             }
 
@@ -79,36 +85,20 @@ class ProgressCog(commands.Cog):
             form_data = {
                 'project_name': project_name,
                 'time_spent': time_spent,
+                'note': note,
                 'helper_mentions': helper,
                 'screenshot_urls': data['screenshot_urls']
             }
 
-            prefix = self._TABLE_PREFIX['progress_report']
-            display_id = f"{prefix}_{form_id}"
+            display_id = make_display_id("progress_report", form_id)
 
-            confirm_msg = await interaction.followup.send(f"✅ Progress report `{display_id}` submitted - pending approval.")
+            confirm_msg = await interaction.followup.send(f"✅ Submitted · {display_id}\nYour progress report is pending review.")
 
             config = await DBService.get_guild_config(interaction.guild_id)
             if config and config.get('approval_channel_id'):
                 approval_channel = self.bot.get_channel(config['approval_channel_id'])
                 if approval_channel:
-                    embed = discord.Embed(
-                        title="Progress Report",
-                        color=discord.Color.green(),
-                        timestamp=discord.utils.utcnow()
-                    )
-                    embed.add_field(name="Builder", value=interaction.user.display_name, inline=True)
-                    embed.add_field(name="Project", value=project_name, inline=True)
-                    embed.add_field(name="Time Spent", value=time_spent, inline=True)
-                    if helper:
-                        embed.add_field(name="Helper", value=helper, inline=True)
-
-                    if screenshot_urls:
-                        embed.set_image(url=screenshot_urls[0])
-                        if len(screenshot_urls) > 1:
-                            embed.add_field(name="Additional Screenshots", value=f"{len(screenshot_urls)-1} more", inline=False)
-
-                    embed.set_footer(text=f"Form ID: {display_id}")
+                    embed = build_submission_embed('progress_report', form_data, form_id=form_id, submitter_name=interaction.user.display_name)
 
                     view = ApprovalView(
                         table='progress_report',
@@ -123,18 +113,12 @@ class ProgressCog(commands.Cog):
                         form_data=form_data
                     )
                     msg = await approval_channel.send(embed=embed, view=view)
-                    await DBService.set_approval_message_id('progress_report', form_id, msg.id)
-
-                    # Persist confirmation message IDs
-                    await DBService.execute(
-                        "UPDATE progress_report SET confirmation_msg_id = $1, confirmation_channel_id = $2 WHERE id = $3",
-                        confirm_msg.id, interaction.channel_id, form_id
-                    )
+                    await DBService.set_form_message_ids('progress_report', form_id, msg.id, confirm_msg.id, interaction.channel_id)
 
         except Exception as e:
-            logger.exception(f"Error in progress_submit: {e}")
+            logger.exception("Error in progress_submit")
             await interaction.followup.send(
-                "❌ An error occurred while submitting the progress report. Please try again later.",
+                "❌ We could not submit your progress report right now. Please try again shortly.",
                 ephemeral=True
             )
 
