@@ -57,7 +57,7 @@ class RecruitmentCog(commands.Cog):
                 validate_text_field(nickname, 'Nickname', 32),
                 validate_text_field(discord_username, 'Discord Username', 100) if discord_username else None,
                 validate_text_field(age, 'Age', 32) if age else None,
-                validate_numeric_field(plots, 'Plots', minimum=1, maximum=1000),
+                validate_numeric_field(plots, 'Plots', minimum=0, maximum=1000),
             ]):
                 await interaction.followup.send(f'❌ {err}', ephemeral=True)
                 return
