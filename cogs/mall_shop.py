@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 from services.db_service import DBService
 from utils.helpers import upload_attachments, validate_text_field, validate_numeric_field
 from utils.views import ApprovalView
-from utils.form_embeds import build_submission_embed
+from utils.form_embeds import build_submission_embed, format_amount
 from utils.logger import get_logger
 from config.forms import display_id as make_display_id
 
@@ -54,8 +54,8 @@ class MallShopCog(commands.Cog):
         color = discord.Color.red() if overdue else discord.Color.gold()
         embed = discord.Embed(title=title, color=color, timestamp=discord.utils.utcnow())
         embed.add_field(name="Owner", value=name, inline=True)
-        embed.add_field(name="Shops", value=str(shops), inline=True)
-        embed.add_field(name="Total", value=f"{total} coins", inline=True)
+        embed.add_field(name="Shops", value=format_amount(shops), inline=True)
+        embed.add_field(name="Total", value=f"{format_amount(total)} coins", inline=True)
         if due_date:
             embed.add_field(name="Due Date", value=str(due_date), inline=True)
         if overdue:

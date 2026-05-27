@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Iterable, Sequence
 
 import discord
@@ -38,6 +39,22 @@ def _coalesce(*values: object, default: str = "?") -> str:
 
 def _bool_text(value: object) -> str:
     return "Yes" if bool(value) else "No"
+
+
+def format_amount(value: object, default: str = "0") -> str:
+    """Format numeric values without scientific notation."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    try:
+        num = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return str(value)
+    text = format(num, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or default
 
 
 def _base_embed(title: str, color: discord.Color, form_id: int | None = None) -> discord.Embed:
@@ -90,7 +107,7 @@ def build_submission_embed(table: str, form_data: dict, *, form_id: int, submitt
 
     if table == "recruitment":
         embed.add_field(name="New Player", value=f"{_coalesce(form_data.get('nickname'))} ({_coalesce(form_data.get('ingame_username'))})", inline=True)
-        embed.add_field(name="Plots", value=str(form_data.get("plots", 0)), inline=True)
+        embed.add_field(name="Plots", value=format_amount(form_data.get("plots", 0)), inline=True)
         if form_data.get("discord_username"):
             embed.add_field(name="Discord", value=_truncate(form_data.get("discord_username")), inline=True)
         if form_data.get("age"):
@@ -105,21 +122,21 @@ def build_submission_embed(table: str, form_data: dict, *, form_id: int, submitt
     elif table == "purchase_invoice":
         embed.add_field(name="Buyer", value=f"{_coalesce(form_data.get('purchasee_nickname'))} ({_coalesce(form_data.get('purchasee_ingame'))})", inline=True)
         embed.add_field(name="Type", value=_truncate(form_data.get("purchase_type")), inline=True)
-        embed.add_field(name="Amount", value=f"{form_data.get('amount_deposited', 0)} coins", inline=True)
+        embed.add_field(name="Amount", value=f"{format_amount(form_data.get('amount_deposited', 0))} coins", inline=True)
         if form_data.get("seller_display"):
             embed.add_field(name="Seller", value=_truncate(form_data.get("seller_display")), inline=True)
         if form_data.get("num_plots"):
-            embed.add_field(name="Plots", value=f"{form_data.get('num_plots')} (total: {form_data.get('total_plots', 0)})", inline=True)
+            embed.add_field(name="Plots", value=f"{format_amount(form_data.get('num_plots'))} (total: {format_amount(form_data.get('total_plots', 0))})", inline=True)
         if form_data.get("banner_color"):
             embed.add_field(name="Mall Shop", value=f"Color {form_data.get('banner_color')} · #{form_data.get('shop_number')}", inline=True)
         if form_data.get("house_number") and form_data.get("purchase_type") == "spawn_house":
             embed.add_field(name="Spawn House", value=f"House #{form_data.get('house_number')}", inline=True)
     elif table == "mall_shop":
         embed.add_field(name="Owner", value=_truncate(form_data.get("ingame_name")), inline=True)
-        embed.add_field(name="Shops", value=str(form_data.get("amount_of_shops", 0)), inline=True)
-        embed.add_field(name="Total", value=f"{form_data.get('total_amount', 0)} coins", inline=True)
+        embed.add_field(name="Shops", value=format_amount(form_data.get("amount_of_shops", 0)), inline=True)
+        embed.add_field(name="Total", value=f"{format_amount(form_data.get('total_amount', 0))} coins", inline=True)
         embed.add_field(name="Cycle", value=_truncate(form_data.get("payment_frequency")), inline=True)
-        embed.add_field(name="Periods Paid", value=str(form_data.get("paid_periods", 1)), inline=True)
+        embed.add_field(name="Periods Paid", value=format_amount(form_data.get("paid_periods", 1)), inline=True)
         if form_data.get("banner_color"):
             embed.add_field(name="Banner Color", value=_truncate(form_data.get("banner_color")), inline=True)
         if form_data.get("shop_number"):
@@ -128,7 +145,7 @@ def build_submission_embed(table: str, form_data: dict, *, form_id: int, submitt
             embed.add_field(name="Notes", value=_truncate(form_data.get("notes")), inline=False)
     elif table == "supplier":
         embed.add_field(name="Supplied Item", value=_truncate(form_data.get("supplied_item")), inline=True)
-        embed.add_field(name="Quantity", value=str(form_data.get("quantity", 0)), inline=True)
+        embed.add_field(name="Quantity", value=format_amount(form_data.get("quantity", 0)), inline=True)
         embed.add_field(name="Difficulty", value=_truncate(form_data.get("difficulty_to_obtain")), inline=True)
         embed.add_field(name="Time Spent", value=_truncate(form_data.get("time_spent")), inline=True)
     elif table == "demolition_report":
@@ -174,7 +191,7 @@ def build_approval_embed(table: str, form_data: dict, *, form_id: int, submitter
 
     if table == "recruitment":
         embed.add_field(name="New Player", value=f"{_coalesce(form_data.get('nickname'))} ({_coalesce(form_data.get('ingame_username'))})", inline=True)
-        embed.add_field(name="Plots", value=str(form_data.get("plots", 0)), inline=True)
+        embed.add_field(name="Plots", value=format_amount(form_data.get("plots", 0)), inline=True)
         if form_data.get("discord_username"):
             embed.add_field(name="Discord", value=_truncate(form_data.get("discord_username")), inline=True)
         if form_data.get("age"):
@@ -189,21 +206,21 @@ def build_approval_embed(table: str, form_data: dict, *, form_id: int, submitter
     elif table == "purchase_invoice":
         embed.add_field(name="Buyer", value=f"{_coalesce(form_data.get('purchasee_nickname'))} ({_coalesce(form_data.get('purchasee_ingame'))})", inline=True)
         embed.add_field(name="Type", value=_truncate(form_data.get("purchase_type")), inline=True)
-        embed.add_field(name="Amount", value=f"{form_data.get('amount_deposited', 0)} coins", inline=True)
+        embed.add_field(name="Amount", value=f"{format_amount(form_data.get('amount_deposited', 0))} coins", inline=True)
         if form_data.get("seller_display"):
             embed.add_field(name="Seller", value=_truncate(form_data.get("seller_display")), inline=True)
         if form_data.get("num_plots"):
-            embed.add_field(name="Plots", value=f"{form_data.get('num_plots')} (total: {form_data.get('total_plots', 0)})", inline=True)
+            embed.add_field(name="Plots", value=f"{format_amount(form_data.get('num_plots'))} (total: {format_amount(form_data.get('total_plots', 0))})", inline=True)
         if form_data.get("banner_color"):
             embed.add_field(name="Mall Shop", value=f"Color {form_data.get('banner_color')} · #{form_data.get('shop_number')}", inline=True)
         if form_data.get("house_number") and form_data.get("purchase_type") == "spawn_house":
             embed.add_field(name="Spawn House", value=f"House #{form_data.get('house_number')}", inline=True)
     elif table == "mall_shop":
         embed.add_field(name="Owner", value=_truncate(form_data.get("ingame_name")), inline=True)
-        embed.add_field(name="Shops", value=str(form_data.get("amount_of_shops", 0)), inline=True)
-        embed.add_field(name="Total", value=f"{form_data.get('total_amount', 0)} coins", inline=True)
+        embed.add_field(name="Shops", value=format_amount(form_data.get("amount_of_shops", 0)), inline=True)
+        embed.add_field(name="Total", value=f"{format_amount(form_data.get('total_amount', 0))} coins", inline=True)
         embed.add_field(name="Cycle", value=_truncate(form_data.get("payment_frequency")), inline=True)
-        embed.add_field(name="Periods Paid", value=str(form_data.get("paid_periods", 1)), inline=True)
+        embed.add_field(name="Periods Paid", value=format_amount(form_data.get("paid_periods", 1)), inline=True)
         if form_data.get("banner_color"):
             embed.add_field(name="Banner Color", value=_truncate(form_data.get("banner_color")), inline=True)
         if form_data.get("shop_number"):
@@ -214,7 +231,7 @@ def build_approval_embed(table: str, form_data: dict, *, form_id: int, submitter
             embed.add_field(name="Coverage Ends", value=_truncate(form_data.get("paid_until")), inline=True)
     elif table == "supplier":
         embed.add_field(name="Supplied Item", value=_truncate(form_data.get("supplied_item")), inline=True)
-        embed.add_field(name="Quantity", value=str(form_data.get("quantity", 0)), inline=True)
+        embed.add_field(name="Quantity", value=format_amount(form_data.get("quantity", 0)), inline=True)
         embed.add_field(name="Difficulty", value=_truncate(form_data.get("difficulty_to_obtain")), inline=True)
         embed.add_field(name="Time Spent", value=_truncate(form_data.get("time_spent")), inline=True)
     elif table == "demolition_report":
@@ -242,7 +259,7 @@ def build_approval_embed(table: str, form_data: dict, *, form_id: int, submitter
 def build_summary(table: str, form_data: dict, form_id: int | None = None) -> str:
     prefix = FORM_TABLE_PREFIX.get(table, "unk")
     if table == "recruitment":
-        return f"Recruited {form_data.get('nickname', '?')} ({form_data.get('ingame_username', '?')}) - {form_data.get('plots', 0)} plots"
+        return f"Recruited {form_data.get('nickname', '?')} ({form_data.get('ingame_username', '?')}) - {format_amount(form_data.get('plots', 0))} plots"
     if table == "progress_report":
         note = form_data.get("note")
         text = f"Project '{form_data.get('project_name', '?')}' - {form_data.get('time_spent', '?')}"
@@ -251,14 +268,14 @@ def build_summary(table: str, form_data: dict, form_id: int | None = None) -> st
         return text
     if table == "purchase_invoice":
         purchase_type = form_data.get("purchase_type", "?")
-        text = f"Sale to {form_data.get('purchasee_nickname', '?')} for {form_data.get('amount_deposited', 0)} coins"
+        text = f"Sale to {form_data.get('purchasee_nickname', '?')} for {format_amount(form_data.get('amount_deposited', 0))} coins"
         if purchase_type == "spawn_house" and form_data.get("house_number"):
-            text += f" (Spawn House #{form_data['house_number']})"
+            text += f" (Spawn House #{format_amount(form_data['house_number'])})"
         return text
     if table == "mall_shop":
-        return f"Mall shop rent for {form_data.get('ingame_name', '?')} - {form_data.get('amount_of_shops', 0)} shops / {form_data.get('total_amount', 0)} coins"
+        return f"Mall shop rent for {form_data.get('ingame_name', '?')} - {format_amount(form_data.get('amount_of_shops', 0))} shops / {format_amount(form_data.get('total_amount', 0))} coins"
     if table == "supplier":
-        return f"Supplier report for {form_data.get('supplied_item', '?')} - Qty {form_data.get('quantity', 0)} · {form_data.get('difficulty_to_obtain', '?')}"
+        return f"Supplier report for {form_data.get('supplied_item', '?')} - Qty {format_amount(form_data.get('quantity', 0))} · {form_data.get('difficulty_to_obtain', '?')}"
     if table == "demolition_report":
         return f"Demolished {form_data.get('ingame_username', '?')} - {form_data.get('removed', '?')}"
     if table == "demolition_request":

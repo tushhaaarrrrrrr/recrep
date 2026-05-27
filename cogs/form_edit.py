@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from services.db_service import DBService
-from utils.form_embeds import build_submission_embed
+from utils.form_embeds import build_submission_embed, format_amount
 from utils.logger import get_logger
 from config.forms import FORM_TABLE_PREFIX, FormStatus
 
@@ -181,12 +181,14 @@ class FormEditCog(commands.Cog):
                 return
 
         await DBService.update_form_field(table, numeric_id, field, value)
-        logger.info(f"User {interaction.user.id} edited {table}#{numeric_id}: {field}={value}")
+        log_value = format_amount(value) if field in ('plots', 'num_plots', 'total_plots', 'shop_number', 'house_number', 'amount_of_shops', 'paid_periods', 'amount_deposited', 'total_amount', 'quantity') else value
+        log_original = format_amount(original_value) if field in ('plots', 'num_plots', 'total_plots', 'shop_number', 'house_number', 'amount_of_shops', 'paid_periods', 'amount_deposited', 'total_amount', 'quantity') else original_value
+        logger.info(f"User {interaction.user.id} edited {table}#{numeric_id}: {field}={log_value}")
 
         await self._refresh_approval_embed(interaction.guild, table, numeric_id)
 
         await interaction.followup.send(
-            f"✅ **Form `{form_id}` updated.** `{field}` changed from `{original_value}` to `{value}`.",
+            f"✅ **Form `{form_id}` updated.** `{field}` changed from `{log_original}` to `{log_value}`.",
             ephemeral=True
         )
 
