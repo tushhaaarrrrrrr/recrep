@@ -299,12 +299,12 @@ async def get_recruitments(start: date, end: date):
 
 async def get_progress_reports(start: date, end: date):
     return await _fetch(f"""
-        SELECT submitted_by, id, submitted_at,
-               project_name, time_spent, helper_mentions, screenshot_urls
-        FROM progress_report
-        WHERE submitted_at >= $1 AND submitted_at < $2
-          AND status = '{FormStatus.APPROVED}'
-        ORDER BY submitted_by, submitted_at
+    SELECT submitted_by, id, submitted_at,
+    project_name, time_spent, note, helper_mentions, screenshot_urls
+    FROM progress_report
+    WHERE submitted_at >= $1 AND submitted_at < $2
+    AND status = '{FormStatus.APPROVED}'
+    ORDER BY submitted_by, submitted_at
     """, start, end)
 
 
@@ -527,7 +527,7 @@ async def load_bundle(month_str: str, output_path: Path, skip_empty: bool = Fals
             {
                 "Project": txt(row["project_name"]) or "—",
                 "Time Spent": txt(row["time_spent"]) or "—",
-                "Note": txt(row["note"]) if row["note"] is not None else "—",
+                "Note": txt(row.get("note")) or "—",
                 "Hours": f"{hours:.2f}",
                 "Type": kind.title(),
                 "Auto Payment": money(auto),
